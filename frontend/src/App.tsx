@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { TonConnectUIProvider, TonConnectButton, useTonAddress, useTonConnectUI } from '@tonconnect/ui-react';
 
 const API_BASE = 'https://ton-trade-wars-api.zhangbanzhuan.workers.dev';
+const BOT_USERNAME = 'TonTradeWarsbot';
 
 interface Commodity {
   id: string;
@@ -11,6 +12,7 @@ interface Commodity {
   prev_price: number;
   npc_stock: number;
   spread_pct: number;
+  history?: number[];
 }
 
 interface Holding {
@@ -49,13 +51,42 @@ interface StoreItem {
   repeatable: boolean;
 }
 
-function getTelegramUser() {
-  const tgUser = (window as any).Telegram?.WebApp?.initDataUnsafe?.user;
+function Sparkline({ data, width = 72, height = 26, isUp }: { data: number[]; width?: number; height?: number; isUp: boolean }) {
+  if (!data || data.length < 2) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const pad = 2;
+  const points = data
+    .map((val, i) => {
+      const x = pad + (i / (data.length - 1)) * (width - pad * 2);
+      const y = height - pad - ((val - min) / range) * (height - pad * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  const color = isUp ? '#4ade80' : '#f87171';
+  return (
+    <svg width={width} height={height} style={{ display: 'block', overflow: 'visible' }}>
+      <polyline fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" points={points} />
+    </svg>
+  );
+}
+
+function getTelegramContext() {
+  const tg = (window as any).Telegram?.WebApp;
+  const tgUser = tg?.initDataUnsafe?.user;
+  const startParam =
+    tg?.initDataUnsafe?.start_param ||
+    new URLSearchParams(window.location.search).get('startapp') ||
+    '';
+  const ref_by = startParam.startsWith('ref_') ? startParam.slice(4) : startParam || undefined;
+
   if (tgUser?.id) {
     return {
       telegram_id: String(tgUser.id),
       username: tgUser.username || '',
       first_name: tgUser.first_name || 'Trader',
+      ref_by,
     };
   }
   let demoId = localStorage.getItem('tw_demo_uid');
@@ -63,7 +94,7 @@ function getTelegramUser() {
     demoId = `demo_${Math.floor(100000 + Math.random() * 900000)}`;
     localStorage.setItem('tw_demo_uid', demoId);
   }
-  return { telegram_id: demoId, username: 'web_tester', first_name: 'Web Trader' };
+  return { telegram_id: demoId, username: 'web_tester', first_name: 'Web Trader', ref_by };
 }
 
 function TradeWarsApp() {
@@ -74,6 +105,7 @@ function TradeWarsApp() {
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [ownedAssets, setOwnedAssets] = useState<string[]>([]);
+  const [referralCount, setReferralCount] = useState<number>(0);
   const [storeItems, setStoreItems] = useState<StoreItem[]>([]);
   const [leaderboard, setLeaderboard] = useState<RankItem[]>([]);
   const [selected, setSelected] = useState<Commodity | null>(null);
@@ -81,6 +113,7 @@ function TradeWarsApp() {
   const [qty, setQty] = useState<number>(1);
   const [submitting, setSubmitting] = useState(false);
   const [buyingId, setBuyingId] = useState<string | null>(null);
+  const [buyingStatus, setBuyingStatus] = useState<string>('');
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
 
   const showToast = (type: 'ok' | 'err', msg: string) => {
@@ -89,7 +122,7 @@ function TradeWarsApp() {
   };
 
   const loadAll = useCallback(async () => {
-    const user = getTelegramUser();
+    const user = getTelegramContext();
     try {
       const [mktRes, plrRes, storeRes] = await Promise.all([
         fetch(`${API_BASE}/api/market`).then((r) => r.json()),
@@ -105,6 +138,7 @@ function TradeWarsApp() {
         setPlayer(plrRes.data.player);
         setHoldings(plrRes.data.holdings || []);
         setOwnedAssets(plrRes.data.owned_assets || []);
+        setReferralCount(plrRes.data.referral_count || 0);
       }
       if (storeRes.ok) setStoreItems(storeRes.data.items || []);
     } catch (e: any) {
@@ -136,6 +170,29 @@ function TradeWarsApp() {
   const hasGenesis = ownedAssets.includes('item_genesis_nft');
   const inventoryValue = holdings.reduce((sum, h) => sum + h.quantity * h.price, 0);
   const netWorth = (player?.coins || 0) + inventoryValue;
+  const inviteLink = player ? `https://t.me/${BOT_USERNAME}?startapp=ref_${player.telegram_id}` : '';
+
+  const shareInvite = () => {
+    if (!inviteLink) return;
+    const text = encodeURIComponent('⚔️ Trade commodities & win on TON Trade Wars! Join with my link for +2,000 bonus coins:');
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${text}`;
+    const tg = (window as any).Telegram?.WebApp;
+    if (tg?.openTelegramLink) {
+      tg.openTelegramLink(shareUrl);
+    } else {
+      window.open(shareUrl, '_blank');
+    }
+  };
+
+  const copyInvite = async () => {
+    if (!inviteLink) return;
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      showToast('ok', 'Invite link copied! (+2,000 coins each)');
+    } catch {
+      showToast('ok', inviteLink);
+    }
+  };
 
   const openTrade = (item: Commodity, defaultSide: 'BUY' | 'SELL' = 'BUY') => {
     setSelected(item);
@@ -180,6 +237,7 @@ function TradeWarsApp() {
       return;
     }
     setBuyingId(item.id);
+    setBuyingStatus('Confirm in Wallet...');
     try {
       const orderRes = await fetch(`${API_BASE}/api/store/order`, {
         method: 'POST',
@@ -199,30 +257,43 @@ function TradeWarsApp() {
       const { order_id, treasury_wallet, amount_nano } = orderRes.data;
       const txResult = await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 300,
-        messages: [
-          {
-            address: treasury_wallet,
-            amount: amount_nano,
-          },
-        ],
+        messages: [{ address: treasury_wallet, amount: amount_nano }],
       });
 
-      const confirmRes = await fetch(`${API_BASE}/api/store/confirm`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_id, boc: txResult.boc }),
-      }).then((r) => r.json());
+      setBuyingStatus('Verifying on TON...');
+      let confirmed = false;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        const confirmRes = await fetch(`${API_BASE}/api/store/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order_id, boc: txResult.boc }),
+        }).then((r) => r.json());
 
-      if (confirmRes.ok) {
-        showToast('ok', `Unlocked ${item.name}!`);
-        await loadAll();
-      } else {
-        showToast('err', confirmRes.error || 'Confirm failed');
+        if (confirmRes.ok) {
+          confirmed = true;
+          showToast('ok', `Unlocked ${item.name}!`);
+          await loadAll();
+          break;
+        }
+        if (!confirmRes.pending) {
+          showToast('err', confirmRes.error || 'Verification failed');
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+
+      if (!confirmed) {
+        showToast('err', 'Tx sent! Waiting for TON confirmation, refresh in 1 min.');
       }
     } catch (e: any) {
-      showToast('err', e?.message?.includes('Rejected') ? 'Transaction cancelled' : (e?.message || 'Payment failed'));
+      const msg = String(e?.message || '');
+      // 过滤用户主动取消，避免与 TON Connect 原生弹窗重叠
+      if (!/UserRejectsError|Rejected|cancel/i.test(msg)) {
+        showToast('err', msg || 'Payment failed');
+      }
     } finally {
       setBuyingId(null);
+      setBuyingStatus('');
     }
   };
 
@@ -240,7 +311,8 @@ function TradeWarsApp() {
         <div style={{
           position: 'fixed', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 100,
           background: toast.type === 'ok' ? '#166534' : '#991b1b', color: '#fff',
-          padding: '8px 16px', borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+          padding: '8px 16px', borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+          maxWidth: '90%', textAlign: 'center'
         }}>
           {toast.msg}
         </div>
@@ -269,40 +341,50 @@ function TradeWarsApp() {
             <div style={{ fontSize: 15, fontWeight: 700, color: '#4ade80' }}>{(player?.coins || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: walletAddress ? '#4ade80' : '#f59e0b', marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
-          {walletAddress ? `TON Wallet: ${walletAddress.slice(0, 8)}...${walletAddress.slice(-6)}` : 'Connect TON Wallet to unlock Store perks'}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
+          <span style={{ fontSize: 11, color: walletAddress ? '#4ade80' : '#f59e0b' }}>
+            {walletAddress ? `TON: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'Wallet not connected'}
+          </span>
+          <button onClick={shareInvite} style={{
+            background: '#1e293b', color: '#38bdf8', border: '1px solid #334155', borderRadius: 8,
+            padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer'
+          }}>
+            🎁 Invite (+2,000)
+          </button>
         </div>
       </div>
 
       {/* Tab: Market */}
       {tab === 'market' && (
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>📊 Live Commodities (Tap to Trade)</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>📊 Live Commodities (1m Tick · Tap to Trade)</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {commodities.map((c) => {
               const changePct = c.prev_price > 0 ? ((c.price - c.prev_price) / c.prev_price) * 100 : 0;
               const owned = holdings.find((h) => h.commodity_id === c.id)?.quantity || 0;
+              const isUp = changePct >= 0;
               return (
                 <div
                   key={c.id}
                   onClick={() => openTrade(c, 'BUY')}
                   style={{
                     background: '#131b31', border: '1px solid #1e293b', borderRadius: 12, padding: 12,
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer'
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, cursor: 'pointer'
                   }}
                 >
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 15 }}>
-                      {c.symbol} <span style={{ fontWeight: 400, fontSize: 12, color: '#94a3b8' }}>· {c.name}</span>
+                      {c.symbol} <span style={{ fontWeight: 400, fontSize: 11, color: '#94a3b8' }}>· {c.name}</span>
                     </div>
                     <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                      NPC Stock: {c.npc_stock} · Owned: <span style={{ color: owned > 0 ? '#38bdf8' : '#64748b', fontWeight: 600 }}>{owned}</span>
+                      Stock: {c.npc_stock} · Owned: <span style={{ color: owned > 0 ? '#38bdf8' : '#64748b', fontWeight: 600 }}>{owned}</span>
                     </div>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
+                  <Sparkline data={c.history || [c.prev_price, c.price]} isUp={isUp} />
+                  <div style={{ textAlign: 'right', minWidth: 66 }}>
                     <div style={{ fontWeight: 700, fontSize: 15 }}>{c.price.toFixed(2)}</div>
-                    <div style={{ fontSize: 11, color: changePct >= 0 ? '#4ade80' : '#f87171' }}>
-                      {changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%
+                    <div style={{ fontSize: 11, color: isUp ? '#4ade80' : '#f87171' }}>
+                      {isUp ? '+' : ''}{changePct.toFixed(2)}%
                     </div>
                   </div>
                 </div>
@@ -356,7 +438,7 @@ function TradeWarsApp() {
       {/* Tab: TON Store */}
       {tab === 'store' && (
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>💎 TON Store (On-Chain Perks)</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>💎 TON Store (On-Chain Verified)</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {storeItems.map((item) => {
               const isOwned = !item.repeatable && ownedAssets.includes(item.id);
@@ -376,7 +458,7 @@ function TradeWarsApp() {
                       background: isOwned ? '#1e293b' : '#0ea5e9', color: isOwned ? '#4ade80' : '#0b1020', opacity: isBusy ? 0.6 : 1
                     }}
                   >
-                    {isOwned ? '✓ Owned & Active' : isBusy ? 'Confirm in Wallet...' : `Pay ${item.price_ton} TON`}
+                    {isOwned ? '✓ Owned & Active' : isBusy ? buyingStatus : `Pay ${item.price_ton} TON`}
                   </button>
                 </div>
               );
@@ -385,9 +467,27 @@ function TradeWarsApp() {
         </div>
       )}
 
-      {/* Tab: Leaderboard */}
+      {/* Tab: Leaderboard + Referral */}
       {tab === 'rank' && (
         <div>
+          <div style={{ background: '#131b31', border: '1px solid #1e293b', borderRadius: 14, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>🎁 Invite Friends, Earn Coins</div>
+              <div style={{ fontSize: 12, color: '#4ade80', fontWeight: 700 }}>Invited: {referralCount}</div>
+            </div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>
+              Both you and your friend get <strong style={{ color: '#f8fafc' }}>+2,000 Game Coins</strong> instantly when they join.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <button onClick={shareInvite} style={{
+                padding: 10, borderRadius: 10, border: 'none', background: '#0ea5e9', color: '#0b1020', fontWeight: 700, fontSize: 12, cursor: 'pointer'
+              }}>Share in Telegram</button>
+              <button onClick={copyInvite} style={{
+                padding: 10, borderRadius: 10, border: '1px solid #334155', background: '#1e293b', color: '#f1f5f9', fontWeight: 700, fontSize: 12, cursor: 'pointer'
+              }}>Copy Link</button>
+            </div>
+          </div>
+
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>🏆 Global Leaderboard</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {leaderboard.map((r, idx) => (
@@ -419,9 +519,22 @@ function TradeWarsApp() {
             width: '100%', maxWidth: 480, background: '#0f172a', borderTop: '1px solid #334155',
             borderRadius: '18px 18px 0 0', padding: 18
           }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <div style={{ fontSize: 17, fontWeight: 800 }}>{selected.symbol} · {selected.name}</div>
               <button onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 18 }}>✕</button>
+            </div>
+
+            <div style={{ background: '#131b31', borderRadius: 10, padding: '10px 12px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>Current Price</div>
+                <div style={{ fontSize: 18, fontWeight: 800 }}>{selected.price.toFixed(2)}</div>
+              </div>
+              <Sparkline
+                data={selected.history || [selected.prev_price, selected.price]}
+                width={150}
+                height={36}
+                isUp={selected.price >= selected.prev_price}
+              />
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>

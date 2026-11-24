@@ -41,34 +41,86 @@ app.get('/api/health', (c) =>
   c.json({ ok: true, service: 'ton-trade-wars', network: 'ton', time: Date.now() })
 );
 
+// 市场行情 + 最近 20 个历史价格点
 app.get('/api/market', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT * FROM commodities ORDER BY price ASC').all();
-  return c.json({ ok: true, data: results });
+  const { results: commodities } = await c.env.DB.prepare('SELECT * FROM commodities ORDER BY price ASC').all<any>();
+  const { results: histRows } = await c.env.DB.prepare(
+    `SELECT commodity_id, price FROM (
+       SELECT commodity_id, price, recorded_at,
+              ROW_NUMBER() OVER (PARTITION BY commodity_id ORDER BY recorded_at DESC) AS rn
+       FROM price_history
+     ) WHERE rn <= 20 ORDER BY recorded_at ASC`
+  ).all<any>();
+
+  const histMap: Record<string, number[]> = {};
+  for (const r of histRows) {
+    if (!histMap[r.commodity_id]) histMap[r.commodity_id] = [];
+    histMap[r.commodity_id].push(r.price);
+  }
+
+  const data = commodities.map((item) => {
+    const h = histMap[item.id] || [];
+    const history = h.length >= 2 ? h : [item.prev_price, item.price];
+    return { ...item, history };
+  });
+
+  return c.json({ ok: true, data });
 });
 
+// 玩家登录 + 邀请裂变奖励
 app.post('/api/player', async (c) => {
   const body = await c.req.json<{
     telegram_id: string;
     username?: string;
     first_name?: string;
     wallet_address?: string;
+    ref_by?: string;
   }>();
 
   if (!body.telegram_id) return c.json({ ok: false, error: 'Missing telegram_id' }, 400);
 
+  const tgId = String(body.telegram_id);
   const now = Date.now();
   let player = await c.env.DB.prepare('SELECT * FROM players WHERE telegram_id = ?')
-    .bind(String(body.telegram_id))
+    .bind(tgId)
     .first<any>();
 
   if (!player) {
     const id = `plr_${crypto.randomUUID().slice(0, 8)}`;
-    await c.env.DB.prepare(
-      `INSERT INTO players (id, telegram_id, username, first_name, coins, wallet_address, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 10000, ?, ?, ?)`
-    )
-      .bind(id, String(body.telegram_id), body.username || null, body.first_name || 'Trader', body.wallet_address || null, now, now)
-      .run();
+    let validReferrer: any = null;
+
+    if (body.ref_by && String(body.ref_by) !== tgId) {
+      validReferrer = await c.env.DB.prepare('SELECT id, telegram_id FROM players WHERE telegram_id = ?')
+        .bind(String(body.ref_by))
+        .first<any>();
+    }
+
+    const startCoins = validReferrer ? 12000 : 10000;
+    const batch = [
+      c.env.DB.prepare(
+        `INSERT INTO players (id, telegram_id, username, first_name, coins, wallet_address, referred_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        id,
+        tgId,
+        body.username || null,
+        body.first_name || 'Trader',
+        startCoins,
+        body.wallet_address || null,
+        validReferrer ? validReferrer.telegram_id : null,
+        now,
+        now
+      ),
+    ];
+
+    if (validReferrer) {
+      batch.push(
+        c.env.DB.prepare('UPDATE players SET coins = coins + 2000, updated_at = ? WHERE id = ?')
+          .bind(now, validReferrer.id)
+      );
+    }
+
+    await c.env.DB.batch(batch);
     player = await c.env.DB.prepare('SELECT * FROM players WHERE id = ?').bind(id).first<any>();
   } else if (body.wallet_address && body.wallet_address !== player.wallet_address) {
     await c.env.DB.prepare('UPDATE players SET wallet_address = ?, updated_at = ? WHERE id = ?')
@@ -77,20 +129,20 @@ app.post('/api/player', async (c) => {
     player.wallet_address = body.wallet_address;
   }
 
-  const { results: holdings } = await c.env.DB.prepare(
-    `SELECT h.commodity_id, h.quantity, h.cost_basis, c.symbol, c.name, c.price
-     FROM holdings h
-     JOIN commodities c ON h.commodity_id = c.id
-     WHERE h.player_id = ? AND h.quantity > 0`
-  )
-    .bind(player.id)
-    .all();
-
-  const { results: perks } = await c.env.DB.prepare(
-    `SELECT DISTINCT asset_id FROM ton_txs WHERE player_id = ? AND status = 'CONFIRMED'`
-  )
-    .bind(player.id)
-    .all<any>();
+  const [{ results: holdings }, { results: perks }, refRow] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT h.commodity_id, h.quantity, h.cost_basis, c.symbol, c.name, c.price
+       FROM holdings h
+       JOIN commodities c ON h.commodity_id = c.id
+       WHERE h.player_id = ? AND h.quantity > 0`
+    ).bind(player.id).all(),
+    c.env.DB.prepare(
+      `SELECT DISTINCT asset_id FROM ton_txs WHERE player_id = ? AND status = 'CONFIRMED'`
+    ).bind(player.id).all<any>(),
+    c.env.DB.prepare('SELECT COUNT(*) as cnt FROM players WHERE referred_by = ?')
+      .bind(tgId)
+      .first<any>(),
+  ]);
 
   return c.json({
     ok: true,
@@ -98,6 +150,7 @@ app.post('/api/player', async (c) => {
       player,
       holdings,
       owned_assets: perks.map((p) => p.asset_id),
+      referral_count: refRow?.cnt || 0,
     },
   });
 });
@@ -286,6 +339,7 @@ app.post('/api/store/order', async (c) => {
   });
 });
 
+// Toncenter 链上查账防伪核验
 app.post('/api/store/confirm', async (c) => {
   const body = await c.req.json<{ order_id: string; boc: string }>();
   if (!body.order_id || !body.boc) return c.json({ ok: false, error: 'Missing order_id or boc' }, 400);
@@ -294,11 +348,41 @@ app.post('/api/store/confirm', async (c) => {
   if (!order) return c.json({ ok: false, error: 'Order not found' }, 404);
   if (order.status === 'CONFIRMED') return c.json({ ok: true, data: { already_confirmed: true } });
 
+  // 查询 Toncenter 收款地址最新 15 笔交易
+  const tcUrl = `https://toncenter.com/api/v2/getTransactions?address=${encodeURIComponent(c.env.TREASURY_WALLET)}&limit=15`;
+  const tcRes = await fetch(tcUrl);
+  const tcJson = await tcRes.json<any>();
+
+  if (!tcJson.ok || !Array.isArray(tcJson.result)) {
+    return c.json({ ok: false, pending: true, error: 'TON indexer busy, retrying...' }, 202);
+  }
+
+  const minUtime = Math.floor(order.created_at / 1000) - 60;
+  const requiredNano = BigInt(order.amount_nano);
+  let matchedHash: string | null = null;
+
+  for (const tx of tcJson.result) {
+    const hash = tx?.transaction_id?.hash;
+    const inVal = tx?.in_msg?.value ? BigInt(tx.in_msg.value) : 0n;
+    const utime = Number(tx?.utime || 0);
+
+    if (hash && utime >= minUtime && inVal >= requiredNano) {
+      const used = await c.env.DB.prepare('SELECT id FROM ton_txs WHERE tx_hash = ?').bind(hash).first();
+      if (!used) {
+        matchedHash = hash;
+        break;
+      }
+    }
+  }
+
+  if (!matchedHash) {
+    return c.json({ ok: false, pending: true, error: 'Waiting for TON blockchain confirmation...' }, 202);
+  }
+
   const now = Date.now();
-  const txHash = `boc_${order.id}_${now}`;
   const batch = [
     c.env.DB.prepare(`UPDATE ton_txs SET status = 'CONFIRMED', tx_hash = ?, updated_at = ? WHERE id = ?`)
-      .bind(txHash, now, order.id),
+      .bind(matchedHash, now, order.id),
   ];
 
   if (order.asset_id === 'item_whale_pack') {
@@ -309,7 +393,7 @@ app.post('/api/store/confirm', async (c) => {
   }
 
   await c.env.DB.batch(batch);
-  return c.json({ ok: true, data: { order_id: order.id, asset_id: order.asset_id, status: 'CONFIRMED' } });
+  return c.json({ ok: true, data: { order_id: order.id, tx_hash: matchedHash, asset_id: order.asset_id, status: 'CONFIRMED' } });
 });
 
 app.get('/api/leaderboard', async (c) => {
@@ -340,7 +424,8 @@ async function runMarketTick(db: D1Database) {
     CRYSTAL: 950,
   };
 
-  const batch = results.map((item) => {
+  const batch: D1PreparedStatement[] = [];
+  for (const item of results) {
     const base = basePrices[item.symbol] || item.price;
     const randomShock = (Math.random() - 0.5) * 0.12;
     const meanReversion = ((base - item.price) / base) * 0.1;
@@ -348,10 +433,16 @@ async function runMarketTick(db: D1Database) {
     const roundedPrice = Number(nextPrice.toFixed(2));
     const nextStock = Math.min(2000, item.npc_stock + Math.floor(Math.random() * 20));
 
-    return db
-      .prepare('UPDATE commodities SET prev_price = ?, price = ?, npc_stock = ?, updated_at = ? WHERE id = ?')
-      .bind(item.price, roundedPrice, nextStock, now, item.id);
-  });
+    batch.push(
+      db.prepare('UPDATE commodities SET prev_price = ?, price = ?, npc_stock = ?, updated_at = ? WHERE id = ?')
+        .bind(item.price, roundedPrice, nextStock, now, item.id),
+      db.prepare('INSERT INTO price_history (commodity_id, price, recorded_at) VALUES (?, ?, ?)')
+        .bind(item.id, roundedPrice, now)
+    );
+  }
+
+  // 清理 24 小时前的旧历史记录，保持数据库轻量
+  batch.push(db.prepare('DELETE FROM price_history WHERE recorded_at < ?').bind(now - 86400000));
 
   if (batch.length > 0) await db.batch(batch);
 }
