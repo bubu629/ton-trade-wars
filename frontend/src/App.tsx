@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
-import { TonConnectUIProvider, TonConnectButton, useTonAddress } from '@tonconnect/ui-react';
 
 const API_BASE = 'https://ton-trade-wars-api.zhangbanzhuan.workers.dev';
 const BOT_USERNAME = 'TonTradeWarsbot';
 
 type Lang = 'en' | 'zh';
 type RankDim = 'profit' | 'risk' | 'discipline' | 'consistency';
+type TabKey = 'market' | 'positions' | 'arena' | 'stars' | 'profile';
 
 const I18N = {
   en: {
@@ -33,6 +33,13 @@ const I18N = {
     dimRisk: 'Risk',
     dimDiscipline: 'Discipline',
     dimConsistency: 'Stability',
+    starsTitle: '⭐ Trade Arena Club & Store',
+    starsSub: 'Pay with Telegram Stars · Zero Pay-to-Win (Tools & Cosmetics Only)',
+    activeLabel: '✓ Active',
+    buyStars: (s: number) => `Pay ${s} ⭐`,
+    openingInvoice: 'Opening Stars...',
+    paymentSuccess: 'Payment received! Syncing perks...',
+    openInTgOnly: 'Please open inside Telegram to pay with Stars.',
     profileTitle: '👤 Trader Profile',
     winRate: 'Win Rate',
     profitFactor: 'Profit Factor',
@@ -45,6 +52,11 @@ const I18N = {
     badgePro: '🔥 Active Trader (10+)',
     badgeWin: '⚡ Challenge Winner',
     badgeDisc: '🛡️ Discipline Master',
+    badgeFounder: '🛡️ Genesis Founder',
+    historyTitle: '📜 Recent Trade History (PRO)',
+    historyLocked: 'Upgrade to PRO Trader (199 ⭐) to unlock full trade history & analytics.',
+    historyEmpty: 'No trades recorded yet.',
+    goUpgrade: 'Unlock PRO ⭐',
     inviteTitle: '🤝 Invite Traders',
     invited: 'Invited',
     shareTg: 'Share in Telegram',
@@ -63,8 +75,9 @@ const I18N = {
     confirmBuy: (amt: number, sym: string) => `Buy $${amt.toFixed(0)} ${sym}`,
     confirmSell: (pct: number, sym: string) => `Sell ${pct}% ${sym}`,
     navMarket: '📊 Market',
-    navPos: '🎒 Positions',
+    navPos: '🎒 Pos',
     navArena: '🏆 Arena',
+    navStars: '⭐ Store',
     navProfile: '👤 Profile',
   },
   zh: {
@@ -92,6 +105,13 @@ const I18N = {
     dimRisk: '风控',
     dimDiscipline: '纪律',
     dimConsistency: '稳定性',
+    starsTitle: '⭐ 会员订阅与数字商城',
+    starsSub: 'Telegram Stars 官方收款 · 仅含数据分析与装饰，绝不破坏竞技公平',
+    activeLabel: '✓ 已生效',
+    buyStars: (s: number) => `支付 ${s} ⭐`,
+    openingInvoice: '正在唤起 Stars...',
+    paymentSuccess: '支付成功！正在同步会员权益...',
+    openInTgOnly: '请在 Telegram 客户端内打开以使用 Stars 支付。',
     profileTitle: '👤 交易员个人档案',
     winRate: '胜率',
     profitFactor: '盈亏比',
@@ -104,6 +124,11 @@ const I18N = {
     badgePro: '🔥 活跃交易员 (10+)',
     badgeWin: '⚡ 每日挑战胜者',
     badgeDisc: '🛡️ 纪律大师',
+    badgeFounder: '🛡️ 创世荣誉徽章',
+    historyTitle: '📜 历史成交明细 (PRO 专属)',
+    historyLocked: '升级 PRO Trader (199 ⭐) 解锁完整历史成交记录与盈亏复盘。',
+    historyEmpty: '暂无成交记录。',
+    goUpgrade: '前往解锁 PRO ⭐',
     inviteTitle: '🤝 邀请好友参赛',
     invited: '已邀请',
     shareTg: '转发到 Telegram',
@@ -123,10 +148,30 @@ const I18N = {
     confirmSell: (pct: number, sym: string) => `卖出 ${pct}% ${sym}`,
     navMarket: '📊 行情',
     navPos: '🎒 持仓',
-    navArena: '🏆 赛季榜',
+    navArena: '🏆 赛季',
+    navStars: '⭐ 商城',
     navProfile: '👤 档案',
   },
 } as const;
+
+const STARS_ZH: Record<string, { title: string; desc: string }> = {
+  sub_pro: {
+    title: '⭐ PRO Trader (30 天)',
+    desc: '解锁完整历史成交明细、盈亏复盘分析与 PRO 专属标识',
+  },
+  sub_elite: {
+    title: '👑 ELITE Trader (30 天)',
+    desc: '包含全部 PRO 权益 + 交易纪律深度诊断 + ELITE 皇冠标识',
+  },
+  cosmetic_gold_frame: {
+    title: '✨ 黄金交易员边框 (永久)',
+    desc: '排行榜与个人档案专属金色高亮边框',
+  },
+  cosmetic_founder_badge: {
+    title: '🛡️ 创世荣誉徽章 (永久)',
+    desc: '个人主页永久点亮创世交易员盾牌徽章',
+  },
+};
 
 interface Commodity {
   id: string;
@@ -153,7 +198,33 @@ interface Player {
   username?: string;
   first_name?: string;
   coins: number;
-  wallet_address?: string;
+}
+
+interface Entitlements {
+  is_pro: boolean;
+  is_elite: boolean;
+  has_gold_frame: boolean;
+  has_founder_badge: boolean;
+  active_items: string[];
+}
+
+interface RecentTrade {
+  id: string;
+  side: 'BUY' | 'SELL';
+  symbol: string;
+  quantity: number;
+  unit_price: number;
+  total_coins: number;
+  realized_pnl: number;
+  created_at: number;
+}
+
+interface StarsItem {
+  id: string;
+  title: string;
+  desc: string;
+  stars: number;
+  duration_days: number | null;
 }
 
 interface ProfileStats {
@@ -193,6 +264,9 @@ interface RankItem {
   discipline_score: number;
   consistency_score: number;
   total_trades: number;
+  has_gold_frame?: number;
+  is_pro?: number;
+  is_elite?: number;
 }
 
 function fmtPrice(p: number): string {
@@ -261,10 +335,9 @@ function getTelegramContext() {
   return { telegram_id: demoId, username: 'web_tester', first_name: 'Web Trader', ref_by };
 }
 
-function TradeArenaApp() {
-  const walletAddress = useTonAddress();
+export default function App() {
   const [lang, setLang] = useState<Lang>(getInitialLang);
-  const [tab, setTab] = useState<'market' | 'positions' | 'arena' | 'profile'>('market');
+  const [tab, setTab] = useState<TabKey>('market');
   const [rankDim, setRankDim] = useState<RankDim>('profit');
   const [search, setSearch] = useState('');
 
@@ -272,6 +345,15 @@ function TradeArenaApp() {
   const [season, setSeason] = useState<SeasonInfo>({ season_number: 1, days_left: 7 });
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [entitlements, setEntitlements] = useState<Entitlements>({
+    is_pro: false,
+    is_elite: false,
+    has_gold_frame: false,
+    has_founder_badge: false,
+    active_items: [],
+  });
+  const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
+  const [starsItems, setStarsItems] = useState<StarsItem[]>([]);
   const [profile, setProfile] = useState<ProfileStats | null>(null);
   const [todayChallenge, setTodayChallenge] = useState<DailyChallenge | null>(null);
   const [referralCount, setReferralCount] = useState<number>(0);
@@ -282,6 +364,7 @@ function TradeArenaApp() {
   const [buyUsd, setBuyUsd] = useState<number>(500);
   const [sellPct, setSellPct] = useState<number>(100);
   const [submitting, setSubmitting] = useState(false);
+  const [buyingStarId, setBuyingStarId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
 
   const t = I18N[lang];
@@ -300,13 +383,14 @@ function TradeArenaApp() {
   const loadAll = useCallback(async () => {
     const user = getTelegramContext();
     try {
-      const [mktRes, plrRes] = await Promise.all([
+      const [mktRes, plrRes, starsRes] = await Promise.all([
         fetch(`${API_BASE}/api/market`).then((r) => r.json()),
         fetch(`${API_BASE}/api/player`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...user, wallet_address: walletAddress || undefined }),
+          body: JSON.stringify(user),
         }).then((r) => r.json()),
+        fetch(`${API_BASE}/api/stars/items`).then((r) => r.json()),
       ]);
       if (mktRes.ok) {
         setCommodities(mktRes.data || []);
@@ -315,15 +399,18 @@ function TradeArenaApp() {
       if (plrRes.ok) {
         setPlayer(plrRes.data.player);
         setHoldings(plrRes.data.holdings || []);
+        if (plrRes.data.entitlements) setEntitlements(plrRes.data.entitlements);
+        setRecentTrades(plrRes.data.recent_trades || []);
         setProfile(plrRes.data.profile || null);
         setTodayChallenge(plrRes.data.today_challenge || null);
         setReferralCount(plrRes.data.referral_count || 0);
         if (plrRes.data.season) setSeason(plrRes.data.season);
       }
+      if (starsRes.ok) setStarsItems(starsRes.data || []);
     } catch (e: any) {
       showToast('err', e.message || 'Network error');
     }
-  }, [walletAddress]);
+  }, []);
 
   const loadRank = useCallback(async (dim: RankDim) => {
     try {
@@ -365,6 +452,41 @@ function TradeArenaApp() {
       showToast('ok', t.linkCopied);
     } catch {
       showToast('ok', inviteLink);
+    }
+  };
+
+  const buyWithStars = async (item: StarsItem) => {
+    if (!player || buyingStarId) return;
+    const tg = (window as any).Telegram?.WebApp;
+    if (!tg?.openInvoice) {
+      showToast('err', t.openInTgOnly);
+      return;
+    }
+    setBuyingStarId(item.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/stars/invoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegram_id: player.telegram_id, item_id: item.id }),
+      }).then((r) => r.json());
+
+      if (!res.ok || !res.data?.invoice_url) {
+        showToast('err', res.error || 'Failed to create Stars invoice');
+        return;
+      }
+
+      tg.openInvoice(res.data.invoice_url, (status: string) => {
+        if (status === 'paid') {
+          showToast('ok', t.paymentSuccess);
+          setTimeout(() => loadAll(), 1500);
+        } else if (status === 'failed') {
+          showToast('err', 'Stars payment failed');
+        }
+      });
+    } catch (e: any) {
+      showToast('err', e.message || 'Network error');
+    } finally {
+      setBuyingStarId(null);
     }
   };
 
@@ -462,26 +584,35 @@ function TradeArenaApp() {
       )}
 
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 16, fontWeight: 900, letterSpacing: 0.4 }}>{t.brand}</span>
-            <button onClick={toggleLang} style={{
-              background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155',
-              borderRadius: 6, padding: '2px 6px', fontSize: 10, fontWeight: 700, cursor: 'pointer'
-            }}>
-              {lang === 'en' ? '中文' : 'EN'}
-            </button>
+            <span style={{ fontSize: 17, fontWeight: 900, letterSpacing: 0.4 }}>{t.brand}</span>
+            {entitlements.is_elite ? (
+              <span style={{ fontSize: 10, fontWeight: 800, background: '#facc15', color: '#0b1020', padding: '2px 6px', borderRadius: 6 }}>👑 ELITE</span>
+            ) : entitlements.is_pro ? (
+              <span style={{ fontSize: 10, fontWeight: 800, background: '#38bdf8', color: '#0b1020', padding: '2px 6px', borderRadius: 6 }}>⭐ PRO</span>
+            ) : null}
           </div>
           <div style={{ fontSize: 11, color: '#38bdf8', fontWeight: 700, marginTop: 2 }}>
             {t.seasonTag(season.season_number, season.days_left)}
           </div>
         </div>
-        <TonConnectButton />
+        <button onClick={toggleLang} style={{
+          background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155',
+          borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer'
+        }}>
+          {lang === 'en' ? '中文' : 'EN'}
+        </button>
       </div>
 
       {/* Equity Card */}
-      <div style={{ background: 'linear-gradient(135deg, #131b31 0%, #0f172a 100%)', border: '1px solid #1e293b', borderRadius: 14, padding: 14, marginBottom: 12 }}>
+      <div style={{
+        background: 'linear-gradient(135deg, #131b31 0%, #0f172a 100%)',
+        border: entitlements.has_gold_frame ? '1.5px solid #facc15' : '1px solid #1e293b',
+        boxShadow: entitlements.has_gold_frame ? '0 0 12px rgba(250, 204, 21, 0.2)' : 'none',
+        borderRadius: 14, padding: 14, marginBottom: 12
+      }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <div>
             <div style={{ fontSize: 11, color: '#94a3b8' }}>{t.netWorth}</div>
@@ -505,7 +636,6 @@ function TradeArenaApp() {
       {/* Tab: Market */}
       {tab === 'market' && (
         <div>
-          {/* Daily Challenge Card */}
           <div style={{ background: '#131b31', border: '1px solid #1e3a5f', borderRadius: 12, padding: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8', marginBottom: 4 }}>{t.challengeTitle}</div>
             {!todayChallenge ? (
@@ -531,7 +661,6 @@ function TradeArenaApp() {
             )}
           </div>
 
-          {/* Search */}
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -648,19 +777,67 @@ function TradeArenaApp() {
               if (rankDim === 'consistency') mainVal = `${r.consistency_score} pts`;
               return (
                 <div key={r.id} style={{
-                  background: '#131b31', border: '1px solid #1e293b', borderRadius: 12, padding: '10px 12px',
+                  background: '#131b31',
+                  border: r.has_gold_frame ? '1.5px solid #facc15' : '1px solid #1e293b',
+                  borderRadius: 12, padding: '10px 12px',
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center'
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ width: 24, fontWeight: 800, color: idx < 3 ? '#facc15' : '#64748b' }}>#{idx + 1}</div>
                     <div>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}>{r.first_name || r.username || 'Trader'}</div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>
+                        {r.first_name || r.username || 'Trader'}{' '}
+                        {r.is_elite ? '👑' : r.is_pro ? '⭐' : ''}
+                      </div>
                       <div style={{ fontSize: 11, color: '#64748b' }}>
                         ${r.net_worth.toFixed(0)} · {t.winRate} {r.win_rate}% · {r.total_trades}T
                       </div>
                     </div>
                   </div>
                   <div style={{ fontWeight: 800, fontSize: 14, color: '#4ade80' }}>{mainVal}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Telegram Stars Store */}
+      {tab === 'stars' && (
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4, color: '#f8fafc' }}>{t.starsTitle}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>{t.starsSub}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {starsItems.map((item) => {
+              const zhMeta = lang === 'zh' ? STARS_ZH[item.id] : null;
+              const title = zhMeta?.title || item.title;
+              const desc = zhMeta?.desc || item.desc;
+              const isOwned = entitlements.active_items.includes(item.id);
+              const isBusy = buyingStarId === item.id;
+              return (
+                <div key={item.id} style={{
+                  background: '#131b31',
+                  border: item.id === 'sub_elite' ? '1.5px solid #facc15' : '1px solid #1e293b',
+                  borderRadius: 14, padding: 14
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <div style={{ fontWeight: 800, fontSize: 15 }}>{title}</div>
+                    <div style={{ fontWeight: 800, fontSize: 14, color: '#facc15' }}>{item.stars} ⭐</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>{desc}</div>
+                  <button
+                    disabled={isOwned || isBusy}
+                    onClick={() => buyWithStars(item)}
+                    style={{
+                      width: '100%', padding: 11, borderRadius: 10, border: 'none', fontWeight: 800, fontSize: 13,
+                      cursor: isOwned ? 'default' : 'pointer',
+                      background: isOwned ? '#1e293b' : '#facc15',
+                      color: isOwned ? '#4ade80' : '#0b1020',
+                      opacity: isBusy ? 0.6 : 1
+                    }}
+                  >
+                    {isOwned ? t.activeLabel : isBusy ? t.openingInvoice : t.buyStars(item.stars)}
+                  </button>
                 </div>
               );
             })}
@@ -697,6 +874,7 @@ function TradeArenaApp() {
                 { label: t.badgePro, unlocked: (profile?.total_trades ?? 0) >= 10 },
                 { label: t.badgeWin, unlocked: (profile?.challenge_wins ?? 0) >= 1 },
                 { label: t.badgeDisc, unlocked: (profile?.discipline_score ?? 0) >= 75 },
+                { label: t.badgeFounder, unlocked: entitlements.has_founder_badge },
               ].map((b) => (
                 <span key={b.label} style={{
                   padding: '6px 10px', borderRadius: 8, fontSize: 11, fontWeight: 700,
@@ -708,6 +886,40 @@ function TradeArenaApp() {
                 </span>
               ))}
             </div>
+          </div>
+
+          {/* PRO Recent Trade History */}
+          <div style={{ background: '#131b31', border: '1px solid #1e293b', borderRadius: 14, padding: 14, marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10 }}>{t.historyTitle}</div>
+            {!entitlements.is_pro ? (
+              <div>
+                <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>{t.historyLocked}</div>
+                <button onClick={() => setTab('stars')} style={{
+                  width: '100%', padding: 10, borderRadius: 10, border: 'none', background: '#facc15', color: '#0b1020', fontWeight: 800, fontSize: 12, cursor: 'pointer'
+                }}>{t.goUpgrade}</button>
+              </div>
+            ) : recentTrades.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#64748b' }}>{t.historyEmpty}</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {recentTrades.map((tr) => (
+                  <div key={tr.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, paddingBottom: 6, borderBottom: '1px solid #1e293b' }}>
+                    <div>
+                      <span style={{ fontWeight: 800, color: tr.side === 'BUY' ? '#4ade80' : '#f87171' }}>{tr.side}</span>{' '}
+                      <strong>{tr.symbol}</strong> <span style={{ color: '#94a3b8' }}>@ ${fmtPrice(tr.unit_price)}</span>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div>${tr.total_coins.toFixed(2)}</div>
+                      {tr.side === 'SELL' && (
+                        <div style={{ fontSize: 11, color: tr.realized_pnl >= 0 ? '#4ade80' : '#f87171' }}>
+                          {tr.realized_pnl >= 0 ? '+' : ''}${tr.realized_pnl.toFixed(2)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Invite */}
@@ -822,29 +1034,21 @@ function TradeArenaApp() {
       {/* Bottom Nav */}
       <div style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, background: '#0f172a', borderTop: '1px solid #1e293b',
-        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', maxWidth: 480, margin: '0 auto'
+        display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', maxWidth: 480, margin: '0 auto'
       }}>
         {([
           ['market', t.navMarket],
           ['positions', t.navPos],
           ['arena', t.navArena],
+          ['stars', t.navStars],
           ['profile', t.navProfile],
         ] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} style={{
-            padding: '14px 0', background: 'none', border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer',
+            padding: '13px 0', background: 'none', border: 'none', fontWeight: 700, fontSize: 11, cursor: 'pointer',
             color: tab === key ? '#38bdf8' : '#64748b'
           }}>{label}</button>
         ))}
       </div>
     </div>
-  );
-}
-
-export default function App() {
-  const manifestUrl = `${window.location.origin}/tonconnect-manifest.json`;
-  return (
-    <TonConnectUIProvider manifestUrl={manifestUrl} actionsConfiguration={{ twaReturnUrl: 'https://t.me/TonTradeWarsbot' }}>
-      <TradeArenaApp />
-    </TonConnectUIProvider>
   );
 }

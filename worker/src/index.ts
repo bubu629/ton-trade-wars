@@ -4,32 +4,37 @@ import { cors } from 'hono/cors';
 type Bindings = {
   DB: D1Database;
   TREASURY_WALLET: string;
+  TELEGRAM_BOT_TOKEN: string;
 };
 
-const STORE_ITEMS = [
+const STARS_ITEMS = [
   {
-    id: 'item_vip_fee',
-    name: '⚡ 0% Fee VIP Pass',
-    desc: 'Permanent 0% trading fee on all BUY/SELL orders',
-    price_ton: 0.1,
-    amount_nano: '100000000',
-    repeatable: false,
+    id: 'sub_pro',
+    title: 'PRO Trader (30 Days)',
+    desc: 'Full trade history, PnL analytics & PRO badge',
+    stars: 199,
+    duration_days: 30,
   },
   {
-    id: 'item_whale_pack',
-    name: '💰 Whale Capital Pack',
-    desc: 'Instant +50,000 Game Coins to dominate the market',
-    price_ton: 0.2,
-    amount_nano: '200000000',
-    repeatable: true,
+    id: 'sub_elite',
+    title: 'ELITE Trader (30 Days)',
+    desc: 'All PRO perks + deep discipline diagnostics & ELITE crown',
+    stars: 399,
+    duration_days: 30,
   },
   {
-    id: 'item_genesis_nft',
-    name: '🚀 Genesis Trader NFT',
-    desc: '2x Max Order Limit + Founder Badge',
-    price_ton: 0.5,
-    amount_nano: '500000000',
-    repeatable: false,
+    id: 'cosmetic_gold_frame',
+    title: 'Golden Trader Frame',
+    desc: 'Permanent golden highlight on Leaderboard & Profile',
+    stars: 50,
+    duration_days: null,
+  },
+  {
+    id: 'cosmetic_founder_badge',
+    title: 'Genesis Honor Badge',
+    desc: 'Permanent Founder Shield on your Trader Profile',
+    stars: 99,
+    duration_days: null,
   },
 ];
 
@@ -40,7 +45,6 @@ app.onError((err, c) => c.json({ ok: false, error: err.message }, 500));
 function getSeasonInfo() {
   const now = Date.now();
   const weekMs = 7 * 24 * 60 * 60 * 1000;
-  // 固定每周一 00:00 UTC 切换赛季
   const epochMonday = Date.UTC(2026, 10, 23, 0, 0, 0);
   const diff = Math.max(0, now - epochMonday);
   const seasonNumber = Math.floor(diff / weekMs) + 1;
@@ -54,16 +58,14 @@ function getTodayStr() {
 }
 
 app.get('/api/health', (c) =>
-  c.json({ ok: true, service: 'trade-arena', network: 'ton', time: Date.now() })
+  c.json({ ok: true, service: 'trade-arena', stars: true, time: Date.now() })
 );
 
-// 手动/首次触发同步真实行情
 app.get('/api/market/sync', async (c) => {
   const count = await runMarketTick(c.env.DB);
   return c.json({ ok: true, updated: count });
 });
 
-// 20 币种实时行情 + 最近 20 个历史价格点
 app.get('/api/market', async (c) => {
   const { results: commodities } = await c.env.DB.prepare(
     'SELECT * FROM commodities ORDER BY id ASC'
@@ -98,7 +100,7 @@ app.get('/api/market', async (c) => {
   return c.json({ ok: true, data, season: getSeasonInfo() });
 });
 
-// 玩家登录 + 持仓 + 交易员档案 + 今日挑战
+// 玩家登录 + 持仓 + 交易员档案 + 今日挑战 + Stars 权益
 app.post('/api/player', async (c) => {
   const body = await c.req.json<{
     telegram_id: string;
@@ -150,7 +152,7 @@ app.post('/api/player', async (c) => {
   const today = getTodayStr();
   const [
     { results: holdings },
-    { results: perks },
+    { results: activeStars },
     refRow,
     tradeStats,
     todayChallenge,
@@ -163,8 +165,10 @@ app.post('/api/player', async (c) => {
        WHERE h.player_id = ? AND h.quantity > 0.00000001`
     ).bind(player.id).all<any>(),
     c.env.DB.prepare(
-      `SELECT DISTINCT asset_id FROM ton_txs WHERE player_id = ? AND status = 'CONFIRMED'`
-    ).bind(player.id).all<any>(),
+      `SELECT item_id, MAX(expires_at) as expires_at FROM stars_purchases
+       WHERE player_id = ? AND (expires_at IS NULL OR expires_at > ?)
+       GROUP BY item_id`
+    ).bind(player.id, now).all<any>(),
     c.env.DB.prepare('SELECT COUNT(*) as cnt FROM players WHERE referred_by = ?')
       .bind(tgId)
       .first<any>(),
@@ -186,6 +190,27 @@ app.post('/api/player', async (c) => {
     ).bind(player.id).first<any>(),
   ]);
 
+  const activeSet = new Set(activeStars.map((s) => s.item_id));
+  const isElite = activeSet.has('sub_elite');
+  const isPro = isElite || activeSet.has('sub_pro');
+  const entitlements = {
+    is_pro: isPro,
+    is_elite: isElite,
+    has_gold_frame: activeSet.has('cosmetic_gold_frame'),
+    has_founder_badge: activeSet.has('cosmetic_founder_badge'),
+    active_items: Array.from(activeSet),
+  };
+
+  let recentTrades: any[] = [];
+  if (isPro) {
+    const { results } = await c.env.DB.prepare(
+      `SELECT t.id, t.side, t.quantity, t.unit_price, t.total_coins, t.realized_pnl, t.created_at, c.symbol
+       FROM trades t JOIN commodities c ON t.commodity_id = c.id
+       WHERE t.player_id = ? ORDER BY t.created_at DESC LIMIT 20`
+    ).bind(player.id).all<any>();
+    recentTrades = results;
+  }
+
   const totalTrades = Number(tradeStats?.total_trades || 0);
   const sellTrades = Number(tradeStats?.sell_trades || 0);
   const winTrades = Number(tradeStats?.win_trades || 0);
@@ -203,7 +228,8 @@ app.post('/api/player', async (c) => {
     data: {
       player,
       holdings,
-      owned_assets: perks.map((p) => p.asset_id),
+      entitlements,
+      recent_trades: recentTrades,
       referral_count: refRow?.cnt || 0,
       season: getSeasonInfo(),
       profile: {
@@ -221,7 +247,100 @@ app.post('/api/player', async (c) => {
   });
 });
 
-// 每日涨跌挑战提交（免费参与，1 小时后自动结算）
+// Telegram Stars 商城列表
+app.get('/api/stars/items', (c) => {
+  return c.json({ ok: true, data: STARS_ITEMS });
+});
+
+// 创建 Telegram Stars 支付链接 (createInvoiceLink)
+app.post('/api/stars/invoice', async (c) => {
+  if (!c.env.TELEGRAM_BOT_TOKEN) {
+    return c.json({ ok: false, error: 'Bot token not configured' }, 500);
+  }
+  const body = await c.req.json<{ telegram_id: string; item_id: string }>();
+  const item = STARS_ITEMS.find((i) => i.id === body.item_id);
+  if (!item) return c.json({ ok: false, error: 'Item not found' }, 404);
+
+  const player = await c.env.DB.prepare('SELECT id FROM players WHERE telegram_id = ?')
+    .bind(String(body.telegram_id))
+    .first<any>();
+  if (!player) return c.json({ ok: false, error: 'Player not found' }, 404);
+
+  const payload = JSON.stringify({ player_id: player.id, item_id: item.id });
+  const tgRes = await fetch(
+    `https://api.telegram.org/bot${c.env.TELEGRAM_BOT_TOKEN}/createInvoiceLink`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: item.title,
+        description: item.desc,
+        payload,
+        provider_token: '',
+        currency: 'XTR',
+        prices: [{ label: item.title, amount: item.stars }],
+      }),
+    }
+  );
+  const tgJson = await tgRes.json<any>();
+  if (!tgJson.ok || !tgJson.result) {
+    return c.json({ ok: false, error: tgJson.description || 'Failed to create invoice' }, 500);
+  }
+
+  return c.json({ ok: true, data: { invoice_url: tgJson.result, item_id: item.id } });
+});
+
+// Telegram Bot Webhook：处理预检 (pre_checkout_query) 与付款成功发货 (successful_payment)
+app.post('/api/telegram/webhook', async (c) => {
+  const update = await c.req.json<any>();
+
+  // 1. 收到付款前预检请求，必须在 10 秒内回复 ok: true
+  if (update.pre_checkout_query) {
+    await fetch(
+      `https://api.telegram.org/bot${c.env.TELEGRAM_BOT_TOKEN}/answerPreCheckoutQuery`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pre_checkout_query_id: update.pre_checkout_query.id,
+          ok: true,
+        }),
+      }
+    );
+    return c.json({ ok: true });
+  }
+
+  // 2. 收到付款成功回调，写入 stars_purchases 账本
+  const payment = update.message?.successful_payment;
+  if (payment) {
+    try {
+      const meta = JSON.parse(payment.invoice_payload || '{}');
+      const item = STARS_ITEMS.find((i) => i.id === meta.item_id);
+      if (meta.player_id && item) {
+        const now = Date.now();
+        const expiresAt = item.duration_days ? now + item.duration_days * 86400000 : null;
+        const chargeId = payment.telegram_payment_charge_id || `chg_${now}`;
+        await c.env.DB.prepare(
+          `INSERT OR IGNORE INTO stars_purchases (id, player_id, item_id, stars_amount, charge_id, expires_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            `str_${crypto.randomUUID().slice(0, 10)}`,
+            meta.player_id,
+            item.id,
+            Number(payment.total_amount || item.stars),
+            chargeId,
+            expiresAt,
+            now
+          )
+          .run();
+      }
+    } catch {}
+  }
+
+  return c.json({ ok: true });
+});
+
 app.post('/api/challenge', async (c) => {
   const body = await c.req.json<{
     telegram_id: string;
@@ -263,7 +382,6 @@ app.post('/api/challenge', async (c) => {
   });
 });
 
-// 支持按 USDT 金额（amount_usdt）或按数量（quantity）进行小数份额买卖
 app.post('/api/trade', async (c) => {
   const body = await c.req.json<{
     telegram_id: string;
@@ -296,7 +414,7 @@ app.post('/api/trade', async (c) => {
 
   const now = Date.now();
   const halfSpread = (item.spread_pct || 0.002) / 2;
-  const FEE_RATE = 0.001; // 0.1% 模拟撮合手续费（公平竞技，所有人一致）
+  const FEE_RATE = 0.001;
 
   if (body.side === 'BUY') {
     const unitPrice = item.price * (1 + halfSpread);
@@ -394,19 +512,9 @@ app.post('/api/trade', async (c) => {
   return c.json({ ok: false, error: 'Invalid side' }, 400);
 });
 
-app.get('/api/store', (c) => {
-  return c.json({
-    ok: true,
-    data: {
-      treasury_wallet: c.env.TREASURY_WALLET,
-      items: STORE_ITEMS,
-    },
-  });
-});
-
-// 4 维度赛季排行榜：profit | risk | discipline | consistency
 app.get('/api/leaderboard', async (c) => {
   const dim = c.req.query('dim') || 'profit';
+  const now = Date.now();
   const { results } = await c.env.DB.prepare(
     `SELECT p.id, p.username, p.first_name, p.coins,
             COALESCE(h_agg.inventory_value, 0) AS inventory_value,
@@ -414,7 +522,10 @@ app.get('/api/leaderboard', async (c) => {
             COALESCE(t_agg.total_trades, 0) AS total_trades,
             COALESCE(t_agg.sell_trades, 0) AS sell_trades,
             COALESCE(t_agg.win_trades, 0) AS win_trades,
-            COALESCE(c_agg.challenge_wins, 0) AS challenge_wins
+            COALESCE(c_agg.challenge_wins, 0) AS challenge_wins,
+            COALESCE(s_agg.has_gold_frame, 0) AS has_gold_frame,
+            COALESCE(s_agg.is_pro, 0) AS is_pro,
+            COALESCE(s_agg.is_elite, 0) AS is_elite
      FROM players p
      LEFT JOIN (
        SELECT h.player_id, SUM(h.quantity * c.price) AS inventory_value
@@ -433,8 +544,17 @@ app.get('/api/leaderboard', async (c) => {
        SELECT player_id, COUNT(*) AS challenge_wins
        FROM daily_challenges WHERE status = 'WON'
        GROUP BY player_id
-     ) c_agg ON p.id = c_agg.player_id`
-  ).all<any>();
+     ) c_agg ON p.id = c_agg.player_id
+     LEFT JOIN (
+       SELECT player_id,
+              MAX(CASE WHEN item_id = 'cosmetic_gold_frame' THEN 1 ELSE 0 END) AS has_gold_frame,
+              MAX(CASE WHEN item_id IN ('sub_pro','sub_elite') THEN 1 ELSE 0 END) AS is_pro,
+              MAX(CASE WHEN item_id = 'sub_elite' THEN 1 ELSE 0 END) AS is_elite
+       FROM stars_purchases
+       WHERE expires_at IS NULL OR expires_at > ?
+       GROUP BY player_id
+     ) s_agg ON p.id = s_agg.player_id`
+  ).bind(now).all<any>();
 
   const enriched = results.map((r) => {
     const roiPct = Number((((r.net_worth - 10000) / 10000) * 100).toFixed(2));
@@ -468,7 +588,6 @@ app.get('/api/leaderboard', async (c) => {
 
 async function fetchLivePrices(symbols: string[]): Promise<Record<string, number>> {
   const prices: Record<string, number> = {};
-  // 1. 优先使用 Binance 公开行情镜像（无地区封锁）
   try {
     const res = await fetch('https://data-api.binance.vision/api/v3/ticker/price');
     if (res.ok) {
@@ -484,7 +603,6 @@ async function fetchLivePrices(symbols: string[]): Promise<Record<string, number
     }
   } catch {}
 
-  // 2. 如果有缺失，用 OKX 公开行情接口兜底
   if (Object.keys(prices).length < symbols.length) {
     try {
       const res = await fetch('https://www.okx.com/api/v5/market/tickers?instType=SPOT');
@@ -525,7 +643,6 @@ async function runMarketTick(db: D1Database): Promise<number> {
     );
   }
 
-  // 自动结算已满 1 小时的每日涨跌挑战
   const { results: pendingChallenges } = await db.prepare(
     `SELECT dc.*, c.symbol FROM daily_challenges dc
      JOIN commodities c ON dc.commodity_id = c.id
