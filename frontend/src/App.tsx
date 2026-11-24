@@ -4,6 +4,137 @@ import { TonConnectUIProvider, TonConnectButton, useTonAddress, useTonConnectUI 
 const API_BASE = 'https://ton-trade-wars-api.zhangbanzhuan.workers.dev';
 const BOT_USERNAME = 'TonTradeWarsbot';
 
+type Lang = 'en' | 'zh';
+
+const I18N = {
+  en: {
+    subtitleVip: '⚡ VIP 0% FEE',
+    subtitleNormal: '0 GAS NPC MARKET',
+    subtitleGenesis: ' · 🚀 GENESIS',
+    netWorth: 'Net Worth (Coins)',
+    cashAvailable: 'Cash Available',
+    walletNotConnected: 'Wallet not connected',
+    inviteBtn: '🎁 Invite (+2,000)',
+    marketTitle: '📊 Live Commodities (1m Tick · Tap to Trade)',
+    stock: 'Stock',
+    owned: 'Owned',
+    invTitle: '🎒 My Holdings',
+    invEmpty: 'No holdings yet. Buy commodities in Market!',
+    avgCost: 'Avg Cost',
+    now: 'Now',
+    storeTitle: '💎 TON Store (On-Chain Verified)',
+    ownedActive: '✓ Owned & Active',
+    payTon: (p: number) => `Pay ${p} TON`,
+    confirmInWallet: 'Confirm in Wallet...',
+    verifyingOnTon: 'Verifying on TON...',
+    unlocked: (name: string) => `Unlocked ${name}!`,
+    txPending: 'Tx sent! Waiting for TON confirmation, refresh in 1 min.',
+    inviteTitle: '🎁 Invite Friends, Earn Coins',
+    invited: 'Invited',
+    inviteDesc1: 'Both you and your friend get ',
+    inviteDescBold: '+2,000 Game Coins',
+    inviteDesc2: ' instantly when they join.',
+    shareTg: 'Share in Telegram',
+    copyLink: 'Copy Link',
+    linkCopied: 'Invite link copied! (+2,000 coins each)',
+    shareText: '⚔️ Trade commodities & win on TON Trade Wars! Join with my link for +2,000 bonus coins:',
+    rankTitle: '🏆 Global Leaderboard',
+    cash: 'Cash',
+    invShort: 'Inv',
+    currentPrice: 'Current Price',
+    buy: 'BUY',
+    sell: 'SELL',
+    quantity: 'Quantity',
+    npcPrice: (side: 'BUY' | 'SELL') => `NPC ${side} Price (incl. spread)`,
+    fee: 'Fee',
+    vipFee: '0% VIP',
+    totalCost: 'Total Cost',
+    netReceive: 'Net Receive',
+    processing: 'Processing...',
+    confirmTrade: (side: 'BUY' | 'SELL', qty: number, sym: string) => `Confirm ${side} ${qty} ${sym}`,
+    tradeOk: (side: 'BUY' | 'SELL', qty: number, sym: string, price: string) => `${side} ${qty} ${sym} @ ${price}`,
+    navMarket: '📊 Market',
+    navInv: '🎒 Inv',
+    navStore: '💎 Store',
+    navRank: '🏆 Rank',
+  },
+  zh: {
+    subtitleVip: '⚡ VIP 免手续费',
+    subtitleNormal: '0 Gas · NPC 模拟盘',
+    subtitleGenesis: ' · 🚀 创世特权',
+    netWorth: '总净值 (游戏金币)',
+    cashAvailable: '可用金币',
+    walletNotConnected: '未连接 TON 钱包',
+    inviteBtn: '🎁 邀请好友 (+2,000)',
+    marketTitle: '📊 实时行情 (每分钟波动 · 点击交易)',
+    stock: '库存',
+    owned: '持仓',
+    invTitle: '🎒 我的持仓',
+    invEmpty: '暂无持仓，去行情页低买高卖吧！',
+    avgCost: '持仓均价',
+    now: '现价',
+    storeTitle: '💎 TON 商城 (链上自动核验)',
+    ownedActive: '✓ 已拥有并生效',
+    payTon: (p: number) => `支付 ${p} TON`,
+    confirmInWallet: '请在钱包确认...',
+    verifyingOnTon: '正在核验链上到账...',
+    unlocked: (name: string) => `已解锁 ${name}！`,
+    txPending: '转账已发出，等待链上确认，请 1 分钟后刷新。',
+    inviteTitle: '🎁 邀请好友，双方领金币',
+    invited: '已邀请',
+    inviteDesc1: '好友通过你的专属链接进入游戏，双方立刻各得 ',
+    inviteDescBold: '+2,000 游戏金币',
+    inviteDesc2: '。',
+    shareTg: '转发到 Telegram',
+    copyLink: '复制邀请链接',
+    linkCopied: '邀请链接已复制！（双方各得 2,000 金币）',
+    shareText: '⚔️ 来玩 TON Trade Wars 模拟期货交易！点我的链接进入，双方各领 2,000 初始金币：',
+    rankTitle: '🏆 全球富豪榜',
+    cash: '现金',
+    invShort: '持仓',
+    currentPrice: '当前市价',
+    buy: '买入',
+    sell: '卖出',
+    quantity: '交易数量',
+    npcPrice: (side: 'BUY' | 'SELL') => `NPC ${side === 'BUY' ? '买入' : '卖出'}价 (含点差)`,
+    fee: '手续费',
+    vipFee: '0% VIP',
+    totalCost: '预计花费',
+    netReceive: '预计到手',
+    processing: '交易处理中...',
+    confirmTrade: (side: 'BUY' | 'SELL', qty: number, sym: string) => `确认${side === 'BUY' ? '买入' : '卖出'} ${qty} 份 ${sym}`,
+    tradeOk: (side: 'BUY' | 'SELL', qty: number, sym: string, price: string) => `${side === 'BUY' ? '买入' : '卖出'}成功：${qty} ${sym} @ ${price}`,
+    navMarket: '📊 行情',
+    navInv: '🎒 持仓',
+    navStore: '💎 商城',
+    navRank: '🏆 排行',
+  },
+} as const;
+
+const COMMODITY_ZH: Record<string, string> = {
+  DATA: '数据矿石',
+  ENERGY: '能源核心',
+  FUEL: '聚变燃料',
+  ALLOY: '稀有合金',
+  CHIP: '量子芯片',
+  CRYSTAL: '虚空水晶',
+};
+
+const STORE_ZH: Record<string, { name: string; desc: string }> = {
+  item_vip_fee: {
+    name: '⚡ 0% 手续费 VIP 通行证',
+    desc: '永久免除所有买入/卖出订单的 0.5% 交易手续费',
+  },
+  item_whale_pack: {
+    name: '💰 巨鲸资金包',
+    desc: '立刻到账 +50,000 游戏金币，快速扩大交易仓位',
+  },
+  item_genesis_nft: {
+    name: '🚀 创世交易员 NFT',
+    desc: '单次买入上限翻倍（NPC 库存 20%）+ 创世专属标识',
+  },
+};
+
 interface Commodity {
   id: string;
   symbol: string;
@@ -49,6 +180,13 @@ interface StoreItem {
   price_ton: number;
   amount_nano: string;
   repeatable: boolean;
+}
+
+function getInitialLang(): Lang {
+  const saved = localStorage.getItem('tw_lang');
+  if (saved === 'zh' || saved === 'en') return saved;
+  const tgLang = (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.language_code || navigator.language || 'en';
+  return String(tgLang).toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
 function Sparkline({ data, width = 72, height = 26, isUp }: { data: number[]; width?: number; height?: number; isUp: boolean }) {
@@ -100,6 +238,7 @@ function getTelegramContext() {
 function TradeWarsApp() {
   const walletAddress = useTonAddress();
   const [tonConnectUI] = useTonConnectUI();
+  const [lang, setLang] = useState<Lang>(getInitialLang);
   const [tab, setTab] = useState<'market' | 'inventory' | 'store' | 'rank'>('market');
   const [player, setPlayer] = useState<Player | null>(null);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
@@ -115,6 +254,20 @@ function TradeWarsApp() {
   const [buyingId, setBuyingId] = useState<string | null>(null);
   const [buyingStatus, setBuyingStatus] = useState<string>('');
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+
+  const t = I18N[lang];
+
+  const toggleLang = () => {
+    const next: Lang = lang === 'en' ? 'zh' : 'en';
+    setLang(next);
+    localStorage.setItem('tw_lang', next);
+  };
+
+  const getCommodityName = (c: { symbol: string; name: string }) =>
+    lang === 'zh' ? (COMMODITY_ZH[c.symbol] || c.name) : c.name;
+
+  const getStoreMeta = (item: StoreItem) =>
+    lang === 'zh' && STORE_ZH[item.id] ? STORE_ZH[item.id] : { name: item.name, desc: item.desc };
 
   const showToast = (type: 'ok' | 'err', msg: string) => {
     setToast({ type, msg });
@@ -174,7 +327,7 @@ function TradeWarsApp() {
 
   const shareInvite = () => {
     if (!inviteLink) return;
-    const text = encodeURIComponent('⚔️ Trade commodities & win on TON Trade Wars! Join with my link for +2,000 bonus coins:');
+    const text = encodeURIComponent(t.shareText);
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${text}`;
     const tg = (window as any).Telegram?.WebApp;
     if (tg?.openTelegramLink) {
@@ -188,7 +341,7 @@ function TradeWarsApp() {
     if (!inviteLink) return;
     try {
       await navigator.clipboard.writeText(inviteLink);
-      showToast('ok', 'Invite link copied! (+2,000 coins each)');
+      showToast('ok', t.linkCopied);
     } catch {
       showToast('ok', inviteLink);
     }
@@ -217,7 +370,7 @@ function TradeWarsApp() {
       }).then((r) => r.json());
 
       if (res.ok) {
-        showToast('ok', `${side} ${qty} ${selected.symbol} @ ${res.data.unitPrice.toFixed(2)}`);
+        showToast('ok', t.tradeOk(side, qty, selected.symbol, res.data.unitPrice.toFixed(2)));
         setSelected(null);
         await loadAll();
       } else {
@@ -236,8 +389,9 @@ function TradeWarsApp() {
       tonConnectUI.openModal();
       return;
     }
+    const meta = getStoreMeta(item);
     setBuyingId(item.id);
-    setBuyingStatus('Confirm in Wallet...');
+    setBuyingStatus(t.confirmInWallet);
     try {
       const orderRes = await fetch(`${API_BASE}/api/store/order`, {
         method: 'POST',
@@ -260,7 +414,7 @@ function TradeWarsApp() {
         messages: [{ address: treasury_wallet, amount: amount_nano }],
       });
 
-      setBuyingStatus('Verifying on TON...');
+      setBuyingStatus(t.verifyingOnTon);
       let confirmed = false;
       for (let attempt = 0; attempt < 15; attempt++) {
         const confirmRes = await fetch(`${API_BASE}/api/store/confirm`, {
@@ -271,7 +425,7 @@ function TradeWarsApp() {
 
         if (confirmRes.ok) {
           confirmed = true;
-          showToast('ok', `Unlocked ${item.name}!`);
+          showToast('ok', t.unlocked(meta.name));
           await loadAll();
           break;
         }
@@ -283,11 +437,10 @@ function TradeWarsApp() {
       }
 
       if (!confirmed) {
-        showToast('err', 'Tx sent! Waiting for TON confirmation, refresh in 1 min.');
+        showToast('err', t.txPending);
       }
     } catch (e: any) {
       const msg = String(e?.message || '');
-      // 过滤用户主动取消，避免与 TON Connect 原生弹窗重叠
       if (!/UserRejectsError|Rejected|cancel/i.test(msg)) {
         showToast('err', msg || 'Payment failed');
       }
@@ -319,11 +472,19 @@ function TradeWarsApp() {
       )}
 
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 8 }}>
         <div>
-          <div style={{ fontSize: 17, fontWeight: 800 }}>⚔️ TON TRADE WARS</div>
-          <div style={{ fontSize: 11, color: '#38bdf8' }}>
-            {hasVip ? '⚡ VIP 0% FEE' : '0 GAS NPC MARKET'}{hasGenesis ? ' · 🚀 GENESIS' : ''}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 16, fontWeight: 800 }}>⚔️ TON TRADE WARS</span>
+            <button onClick={toggleLang} style={{
+              background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155',
+              borderRadius: 6, padding: '2px 6px', fontSize: 10, fontWeight: 700, cursor: 'pointer'
+            }}>
+              {lang === 'en' ? '中文' : 'EN'}
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: '#38bdf8', marginTop: 2 }}>
+            {hasVip ? t.subtitleVip : t.subtitleNormal}{hasGenesis ? t.subtitleGenesis : ''}
           </div>
         </div>
         <TonConnectButton />
@@ -333,23 +494,23 @@ function TradeWarsApp() {
       <div style={{ background: '#131b31', border: '1px solid #1e293b', borderRadius: 14, padding: 14, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <div>
-            <div style={{ fontSize: 11, color: '#94a3b8' }}>Net Worth (Coins)</div>
+            <div style={{ fontSize: 11, color: '#94a3b8' }}>{t.netWorth}</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: '#f8fafc' }}>{netWorth.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 11, color: '#94a3b8' }}>Cash Available</div>
+            <div style={{ fontSize: 11, color: '#94a3b8' }}>{t.cashAvailable}</div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#4ade80' }}>{(player?.coins || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
           </div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
           <span style={{ fontSize: 11, color: walletAddress ? '#4ade80' : '#f59e0b' }}>
-            {walletAddress ? `TON: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'Wallet not connected'}
+            {walletAddress ? `TON: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : t.walletNotConnected}
           </span>
           <button onClick={shareInvite} style={{
             background: '#1e293b', color: '#38bdf8', border: '1px solid #334155', borderRadius: 8,
             padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer'
           }}>
-            🎁 Invite (+2,000)
+            {t.inviteBtn}
           </button>
         </div>
       </div>
@@ -357,7 +518,7 @@ function TradeWarsApp() {
       {/* Tab: Market */}
       {tab === 'market' && (
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>📊 Live Commodities (1m Tick · Tap to Trade)</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>{t.marketTitle}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {commodities.map((c) => {
               const changePct = c.prev_price > 0 ? ((c.price - c.prev_price) / c.prev_price) * 100 : 0;
@@ -374,10 +535,10 @@ function TradeWarsApp() {
                 >
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 15 }}>
-                      {c.symbol} <span style={{ fontWeight: 400, fontSize: 11, color: '#94a3b8' }}>· {c.name}</span>
+                      {c.symbol} <span style={{ fontWeight: 400, fontSize: 11, color: '#94a3b8' }}>· {getCommodityName(c)}</span>
                     </div>
                     <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                      Stock: {c.npc_stock} · Owned: <span style={{ color: owned > 0 ? '#38bdf8' : '#64748b', fontWeight: 600 }}>{owned}</span>
+                      {t.stock}: {c.npc_stock} · {t.owned}: <span style={{ color: owned > 0 ? '#38bdf8' : '#64748b', fontWeight: 600 }}>{owned}</span>
                     </div>
                   </div>
                   <Sparkline data={c.history || [c.prev_price, c.price]} isUp={isUp} />
@@ -397,10 +558,10 @@ function TradeWarsApp() {
       {/* Tab: Inventory */}
       {tab === 'inventory' && (
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>🎒 My Holdings</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>{t.invTitle}</div>
           {holdings.length === 0 ? (
             <div style={{ background: '#131b31', borderRadius: 12, padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
-              No holdings yet. Buy commodities in Market!
+              {t.invEmpty}
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -419,7 +580,7 @@ function TradeWarsApp() {
                   >
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 15 }}>{h.symbol} <span style={{ color: '#38bdf8', fontSize: 13 }}>x{h.quantity}</span></div>
-                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Avg Cost: {h.cost_basis.toFixed(2)} · Now: {h.price.toFixed(2)}</div>
+                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{t.avgCost}: {h.cost_basis.toFixed(2)} · {t.now}: {h.price.toFixed(2)}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 700, fontSize: 14 }}>{(h.quantity * h.price).toFixed(2)}</div>
@@ -438,18 +599,19 @@ function TradeWarsApp() {
       {/* Tab: TON Store */}
       {tab === 'store' && (
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>💎 TON Store (On-Chain Verified)</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>{t.storeTitle}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {storeItems.map((item) => {
+              const meta = getStoreMeta(item);
               const isOwned = !item.repeatable && ownedAssets.includes(item.id);
               const isBusy = buyingId === item.id;
               return (
                 <div key={item.id} style={{ background: '#131b31', border: '1px solid #1e293b', borderRadius: 14, padding: 14 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <div style={{ fontWeight: 800, fontSize: 15 }}>{item.name}</div>
+                    <div style={{ fontWeight: 800, fontSize: 15 }}>{meta.name}</div>
                     <div style={{ fontWeight: 800, fontSize: 14, color: '#38bdf8' }}>{item.price_ton} TON</div>
                   </div>
-                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>{item.desc}</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>{meta.desc}</div>
                   <button
                     disabled={isOwned || isBusy}
                     onClick={() => buyStoreItem(item)}
@@ -458,7 +620,7 @@ function TradeWarsApp() {
                       background: isOwned ? '#1e293b' : '#0ea5e9', color: isOwned ? '#4ade80' : '#0b1020', opacity: isBusy ? 0.6 : 1
                     }}
                   >
-                    {isOwned ? '✓ Owned & Active' : isBusy ? buyingStatus : `Pay ${item.price_ton} TON`}
+                    {isOwned ? t.ownedActive : isBusy ? buyingStatus : t.payTon(item.price_ton)}
                   </button>
                 </div>
               );
@@ -472,23 +634,23 @@ function TradeWarsApp() {
         <div>
           <div style={{ background: '#131b31', border: '1px solid #1e293b', borderRadius: 14, padding: 14, marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <div style={{ fontWeight: 800, fontSize: 14 }}>🎁 Invite Friends, Earn Coins</div>
-              <div style={{ fontSize: 12, color: '#4ade80', fontWeight: 700 }}>Invited: {referralCount}</div>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>{t.inviteTitle}</div>
+              <div style={{ fontSize: 12, color: '#4ade80', fontWeight: 700 }}>{t.invited}: {referralCount}</div>
             </div>
             <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>
-              Both you and your friend get <strong style={{ color: '#f8fafc' }}>+2,000 Game Coins</strong> instantly when they join.
+              {t.inviteDesc1}<strong style={{ color: '#f8fafc' }}>{t.inviteDescBold}</strong>{t.inviteDesc2}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <button onClick={shareInvite} style={{
                 padding: 10, borderRadius: 10, border: 'none', background: '#0ea5e9', color: '#0b1020', fontWeight: 700, fontSize: 12, cursor: 'pointer'
-              }}>Share in Telegram</button>
+              }}>{t.shareTg}</button>
               <button onClick={copyInvite} style={{
                 padding: 10, borderRadius: 10, border: '1px solid #334155', background: '#1e293b', color: '#f1f5f9', fontWeight: 700, fontSize: 12, cursor: 'pointer'
-              }}>Copy Link</button>
+              }}>{t.copyLink}</button>
             </div>
           </div>
 
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>🏆 Global Leaderboard</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>{t.rankTitle}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {leaderboard.map((r, idx) => (
               <div key={r.id} style={{
@@ -499,7 +661,7 @@ function TradeWarsApp() {
                   <div style={{ width: 24, fontWeight: 800, color: idx < 3 ? '#facc15' : '#64748b' }}>#{idx + 1}</div>
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>{r.first_name || r.username || 'Trader'}</div>
-                    <div style={{ fontSize: 11, color: '#64748b' }}>Cash: {r.coins.toFixed(0)} · Inv: {r.inventory_value.toFixed(0)}</div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>{t.cash}: {r.coins.toFixed(0)} · {t.invShort}: {r.inventory_value.toFixed(0)}</div>
                   </div>
                 </div>
                 <div style={{ fontWeight: 700, fontSize: 15, color: '#4ade80' }}>{r.net_worth.toFixed(2)}</div>
@@ -520,13 +682,13 @@ function TradeWarsApp() {
             borderRadius: '18px 18px 0 0', padding: 18
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <div style={{ fontSize: 17, fontWeight: 800 }}>{selected.symbol} · {selected.name}</div>
+              <div style={{ fontSize: 17, fontWeight: 800 }}>{selected.symbol} · {getCommodityName(selected)}</div>
               <button onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 18 }}>✕</button>
             </div>
 
             <div style={{ background: '#131b31', borderRadius: 10, padding: '10px 12px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <div style={{ fontSize: 11, color: '#94a3b8' }}>Current Price</div>
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>{t.currentPrice}</div>
                 <div style={{ fontSize: 18, fontWeight: 800 }}>{selected.price.toFixed(2)}</div>
               </div>
               <Sparkline
@@ -541,15 +703,15 @@ function TradeWarsApp() {
               <button onClick={() => setSide('BUY')} style={{
                 padding: 10, borderRadius: 10, border: 'none', fontWeight: 700, cursor: 'pointer',
                 background: side === 'BUY' ? '#16a34a' : '#1e293b', color: '#fff'
-              }}>BUY</button>
+              }}>{t.buy}</button>
               <button onClick={() => setSide('SELL')} style={{
                 padding: 10, borderRadius: 10, border: 'none', fontWeight: 700, cursor: 'pointer',
                 background: side === 'SELL' ? '#dc2626' : '#1e293b', color: '#fff'
-              }}>SELL (Owned: {selectedHolding?.quantity || 0})</button>
+              }}>{t.sell} ({t.owned}: {selectedHolding?.quantity || 0})</button>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <span style={{ fontSize: 13, color: '#94a3b8' }}>Quantity</span>
+              <span style={{ fontSize: 13, color: '#94a3b8' }}>{t.quantity}</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 {[1, 5, 10, 25].map((n) => (
                   <button key={n} onClick={() => setQty(n)} style={{
@@ -562,13 +724,13 @@ function TradeWarsApp() {
 
             <div style={{ background: '#1e293b', borderRadius: 10, padding: 12, fontSize: 12, color: '#cbd5e1', marginBottom: 14 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span>NPC {side} Price (incl. spread)</span><span>{estUnitPrice.toFixed(2)}</span>
+                <span>{t.npcPrice(side)}</span><span>{estUnitPrice.toFixed(2)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span>Fee ({hasVip ? '0% VIP' : '0.5%'})</span><span>{estFee.toFixed(2)}</span>
+                <span>{t.fee} ({hasVip ? t.vipFee : '0.5%'})</span><span>{estFee.toFixed(2)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 14, color: '#fff', paddingTop: 6, borderTop: '1px solid #334155' }}>
-                <span>{side === 'BUY' ? 'Total Cost' : 'Net Receive'}</span><span>{estTotal.toFixed(2)}</span>
+                <span>{side === 'BUY' ? t.totalCost : t.netReceive}</span><span>{estTotal.toFixed(2)}</span>
               </div>
             </div>
 
@@ -580,7 +742,7 @@ function TradeWarsApp() {
                 background: side === 'BUY' ? '#22c55e' : '#ef4444', color: '#0b1020', opacity: submitting ? 0.6 : 1
               }}
             >
-              {submitting ? 'Processing...' : `Confirm ${side} ${qty} ${selected.symbol}`}
+              {submitting ? t.processing : t.confirmTrade(side, qty, selected.symbol)}
             </button>
           </div>
         </div>
@@ -592,10 +754,10 @@ function TradeWarsApp() {
         display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', maxWidth: 480, margin: '0 auto'
       }}>
         {([
-          ['market', '📊 Market'],
-          ['inventory', '🎒 Inv'],
-          ['store', '💎 Store'],
-          ['rank', '🏆 Rank'],
+          ['market', t.navMarket],
+          ['inventory', t.navInv],
+          ['store', t.navStore],
+          ['rank', t.navRank],
         ] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} style={{
             padding: '14px 0', background: 'none', border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer',
