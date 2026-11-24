@@ -94,7 +94,7 @@ function TradeWarsApp() {
 export default function App() {
   const manifestUrl = `${window.location.origin}/tonconnect-manifest.json`;
   return (
-    <TonConnectUIProvider manifestUrl={manifestUrl}>
+    <TonConnectUIProvider manifestUrl={manifestUrl} actionsConfiguration={{ twaReturnUrl: "https://t.me/TonTradeWarsbot" }}>
       <TradeWarsApp />
     </TonConnectUIProvider>
   );
