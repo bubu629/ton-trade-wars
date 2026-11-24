@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { TonConnectUIProvider, TonConnectButton, useTonAddress } from '@tonconnect/ui-react';
+import { TonConnectUIProvider, TonConnectButton, useTonAddress, useTonConnectUI } from '@tonconnect/ui-react';
 
 const API_BASE = 'https://ton-trade-wars-api.zhangbanzhuan.workers.dev';
 
@@ -40,6 +40,15 @@ interface RankItem {
   net_worth: number;
 }
 
+interface StoreItem {
+  id: string;
+  name: string;
+  desc: string;
+  price_ton: number;
+  amount_nano: string;
+  repeatable: boolean;
+}
+
 function getTelegramUser() {
   const tgUser = (window as any).Telegram?.WebApp?.initDataUnsafe?.user;
   if (tgUser?.id) {
@@ -59,38 +68,45 @@ function getTelegramUser() {
 
 function TradeWarsApp() {
   const walletAddress = useTonAddress();
-  const [tab, setTab] = useState<'market' | 'inventory' | 'rank'>('market');
+  const [tonConnectUI] = useTonConnectUI();
+  const [tab, setTab] = useState<'market' | 'inventory' | 'store' | 'rank'>('market');
   const [player, setPlayer] = useState<Player | null>(null);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [ownedAssets, setOwnedAssets] = useState<string[]>([]);
+  const [storeItems, setStoreItems] = useState<StoreItem[]>([]);
   const [leaderboard, setLeaderboard] = useState<RankItem[]>([]);
   const [selected, setSelected] = useState<Commodity | null>(null);
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
   const [qty, setQty] = useState<number>(1);
   const [submitting, setSubmitting] = useState(false);
+  const [buyingId, setBuyingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
 
   const showToast = (type: 'ok' | 'err', msg: string) => {
     setToast({ type, msg });
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3500);
   };
 
   const loadAll = useCallback(async () => {
     const user = getTelegramUser();
     try {
-      const [mktRes, plrRes] = await Promise.all([
+      const [mktRes, plrRes, storeRes] = await Promise.all([
         fetch(`${API_BASE}/api/market`).then((r) => r.json()),
         fetch(`${API_BASE}/api/player`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...user, wallet_address: walletAddress || undefined }),
         }).then((r) => r.json()),
+        fetch(`${API_BASE}/api/store`).then((r) => r.json()),
       ]);
       if (mktRes.ok) setCommodities(mktRes.data || []);
       if (plrRes.ok) {
         setPlayer(plrRes.data.player);
         setHoldings(plrRes.data.holdings || []);
+        setOwnedAssets(plrRes.data.owned_assets || []);
       }
+      if (storeRes.ok) setStoreItems(storeRes.data.items || []);
     } catch (e: any) {
       showToast('err', e.message || 'Network error');
     }
@@ -116,6 +132,8 @@ function TradeWarsApp() {
     if (tab === 'rank') loadRank();
   }, [tab, loadRank]);
 
+  const hasVip = ownedAssets.includes('item_vip_fee');
+  const hasGenesis = ownedAssets.includes('item_genesis_nft');
   const inventoryValue = holdings.reduce((sum, h) => sum + h.quantity * h.price, 0);
   const netWorth = (player?.coins || 0) + inventoryValue;
 
@@ -155,12 +173,65 @@ function TradeWarsApp() {
     }
   };
 
+  const buyStoreItem = async (item: StoreItem) => {
+    if (!player || buyingId) return;
+    if (!walletAddress) {
+      tonConnectUI.openModal();
+      return;
+    }
+    setBuyingId(item.id);
+    try {
+      const orderRes = await fetch(`${API_BASE}/api/store/order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telegram_id: player.telegram_id,
+          wallet_address: walletAddress,
+          asset_id: item.id,
+        }),
+      }).then((r) => r.json());
+
+      if (!orderRes.ok) {
+        showToast('err', orderRes.error || 'Failed to create order');
+        return;
+      }
+
+      const { order_id, treasury_wallet, amount_nano } = orderRes.data;
+      const txResult = await tonConnectUI.sendTransaction({
+        validUntil: Math.floor(Date.now() / 1000) + 300,
+        messages: [
+          {
+            address: treasury_wallet,
+            amount: amount_nano,
+          },
+        ],
+      });
+
+      const confirmRes = await fetch(`${API_BASE}/api/store/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id, boc: txResult.boc }),
+      }).then((r) => r.json());
+
+      if (confirmRes.ok) {
+        showToast('ok', `Unlocked ${item.name}!`);
+        await loadAll();
+      } else {
+        showToast('err', confirmRes.error || 'Confirm failed');
+      }
+    } catch (e: any) {
+      showToast('err', e?.message?.includes('Rejected') ? 'Transaction cancelled' : (e?.message || 'Payment failed'));
+    } finally {
+      setBuyingId(null);
+    }
+  };
+
   const selectedHolding = selected ? holdings.find((h) => h.commodity_id === selected.id) : null;
   const estUnitPrice = selected
     ? Number((selected.price * (side === 'BUY' ? 1 + selected.spread_pct / 2 : 1 - selected.spread_pct / 2)).toFixed(2))
     : 0;
   const estSubtotal = estUnitPrice * qty;
-  const estFee = Number((estSubtotal * 0.005).toFixed(2));
+  const estFee = hasVip ? 0 : Number((estSubtotal * 0.005).toFixed(2));
   const estTotal = side === 'BUY' ? estSubtotal + estFee : estSubtotal - estFee;
 
   return (
@@ -179,7 +250,9 @@ function TradeWarsApp() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 17, fontWeight: 800 }}>⚔️ TON TRADE WARS</div>
-          <div style={{ fontSize: 11, color: '#38bdf8' }}>TESTNET · 0 GAS NPC MARKET</div>
+          <div style={{ fontSize: 11, color: '#38bdf8' }}>
+            {hasVip ? '⚡ VIP 0% FEE' : '0 GAS NPC MARKET'}{hasGenesis ? ' · 🚀 GENESIS' : ''}
+          </div>
         </div>
         <TonConnectButton />
       </div>
@@ -197,7 +270,7 @@ function TradeWarsApp() {
           </div>
         </div>
         <div style={{ fontSize: 11, color: walletAddress ? '#4ade80' : '#f59e0b', marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
-          {walletAddress ? `TON Wallet: ${walletAddress.slice(0, 8)}...${walletAddress.slice(-6)}` : 'Wallet not connected (Optional for off-chain trading)'}
+          {walletAddress ? `TON Wallet: ${walletAddress.slice(0, 8)}...${walletAddress.slice(-6)}` : 'Connect TON Wallet to unlock Store perks'}
         </div>
       </div>
 
@@ -280,6 +353,38 @@ function TradeWarsApp() {
         </div>
       )}
 
+      {/* Tab: TON Store */}
+      {tab === 'store' && (
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#cbd5e1' }}>💎 TON Store (On-Chain Perks)</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {storeItems.map((item) => {
+              const isOwned = !item.repeatable && ownedAssets.includes(item.id);
+              const isBusy = buyingId === item.id;
+              return (
+                <div key={item.id} style={{ background: '#131b31', border: '1px solid #1e293b', borderRadius: 14, padding: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <div style={{ fontWeight: 800, fontSize: 15 }}>{item.name}</div>
+                    <div style={{ fontWeight: 800, fontSize: 14, color: '#38bdf8' }}>{item.price_ton} TON</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>{item.desc}</div>
+                  <button
+                    disabled={isOwned || isBusy}
+                    onClick={() => buyStoreItem(item)}
+                    style={{
+                      width: '100%', padding: 11, borderRadius: 10, border: 'none', fontWeight: 700, fontSize: 13, cursor: isOwned ? 'default' : 'pointer',
+                      background: isOwned ? '#1e293b' : '#0ea5e9', color: isOwned ? '#4ade80' : '#0b1020', opacity: isBusy ? 0.6 : 1
+                    }}
+                  >
+                    {isOwned ? '✓ Owned & Active' : isBusy ? 'Confirm in Wallet...' : `Pay ${item.price_ton} TON`}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Tab: Leaderboard */}
       {tab === 'rank' && (
         <div>
@@ -347,7 +452,7 @@ function TradeWarsApp() {
                 <span>NPC {side} Price (incl. spread)</span><span>{estUnitPrice.toFixed(2)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span>Fee (0.5%)</span><span>{estFee.toFixed(2)}</span>
+                <span>Fee ({hasVip ? '0% VIP' : '0.5%'})</span><span>{estFee.toFixed(2)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 14, color: '#fff', paddingTop: 6, borderTop: '1px solid #334155' }}>
                 <span>{side === 'BUY' ? 'Total Cost' : 'Net Receive'}</span><span>{estTotal.toFixed(2)}</span>
@@ -371,15 +476,16 @@ function TradeWarsApp() {
       {/* Bottom Nav */}
       <div style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, background: '#0f172a', borderTop: '1px solid #1e293b',
-        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', maxWidth: 480, margin: '0 auto'
+        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', maxWidth: 480, margin: '0 auto'
       }}>
         {([
           ['market', '📊 Market'],
-          ['inventory', '🎒 Inventory'],
+          ['inventory', '🎒 Inv'],
+          ['store', '💎 Store'],
           ['rank', '🏆 Rank'],
         ] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} style={{
-            padding: '14px 0', background: 'none', border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+            padding: '14px 0', background: 'none', border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer',
             color: tab === key ? '#38bdf8' : '#64748b'
           }}>{label}</button>
         ))}

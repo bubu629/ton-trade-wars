@@ -2,10 +2,13 @@ name = "ton-trade-wars-api"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
+[vars]
+TREASURY_WALLET = "UQAi7GWc5DAPgpJxX7eOA_NijNeUHxpiirzAFi1OerKDRt85"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "ton-trade-wars-db"
 database_id = "9960c2ae-2bac-4599-b90c-53bcea456dca"
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
