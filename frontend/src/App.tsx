@@ -490,6 +490,59 @@ export default function App() {
     }
   };
 
+  const [botTokenInput, setBotTokenInput] = useState('');
+
+  const bindBot = async () => {
+    if (!player || submitting) return;
+    const isZh = t.btnUp.includes('看涨');
+    if (!botTokenInput.trim()) {
+      showToast('err', isZh ? '请输入 Bot Token' : 'Please enter Bot Token');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/bind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegram_id: player.telegram_id, bot_token: botTokenInput.trim() }),
+      }).then((r) => r.json());
+      if (res.ok) {
+        showToast('ok', isZh ? `✅ 已绑定 @${res.bot_username}` : `✅ Bound @${res.bot_username}`);
+        setBotTokenInput('');
+        await loadAll();
+      } else {
+        showToast('err', res.error || (isZh ? '绑定失败（需 PRO/ELITE 会员）' : 'Bind failed (PRO/ELITE required)'));
+      }
+    } catch (e: any) {
+      showToast('err', e.message || 'Error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const unbindBot = async () => {
+    if (!player || submitting) return;
+    const isZh = t.btnUp.includes('看涨');
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/unbind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegram_id: player.telegram_id }),
+      }).then((r) => r.json());
+      if (res.ok) {
+        showToast('ok', isZh ? '已解绑专属 Bot' : 'Custom Bot unbound');
+        await loadAll();
+      } else {
+        showToast('err', res.error || 'Failed');
+      }
+    } catch (e: any) {
+      showToast('err', e.message || 'Error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const doCheckin = async () => {
     if (!player || submitting) return;
     setSubmitting(true);
@@ -945,7 +998,56 @@ export default function App() {
             </div>
           </div>
 
-          {/* PRO Recent Trade History */}
+          {/* Custom Bot Binding (PRO / ELITE) */}
+            {(() => {
+              const isZh = t.btnUp.includes('看涨');
+              const boundBot = (player as any)?.custom_bot_username;
+              return (
+                <div style={{ background: '#131b31', border: '1px solid #1e3a5f', borderRadius: 12, padding: 14, marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8', marginBottom: 4 }}>
+                    {isZh ? '🤖 绑定专属 Bot (PRO / ELITE 专属)' : '🤖 Custom Bot Binding (PRO / ELITE)'}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 10 }}>
+                    {isZh
+                      ? '付费会员可绑定 @BotFather 创建的专属机器人 Token'
+                      : 'PRO & ELITE members can bind their own @BotFather Bot Token'}
+                  </div>
+                  {boundBot ? (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#4ade80' }}>
+                        ✅ @{boundBot}
+                      </div>
+                      <button
+                        disabled={submitting}
+                        onClick={unbindBot}
+                        style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: '#991b1b', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                      >
+                        {isZh ? '解绑' : 'Unbind'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        type="password"
+                        value={botTokenInput}
+                        onChange={(e) => setBotTokenInput(e.target.value)}
+                        placeholder={isZh ? '输入 Bot Token (123456:ABC...)' : 'Enter Bot Token (123456:ABC...)'}
+                        style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #334155', background: '#0b1120', color: '#fff', fontSize: 12, outline: 'none' }}
+                      />
+                      <button
+                        disabled={submitting}
+                        onClick={bindBot}
+                        style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      >
+                        {isZh ? '绑定' : 'Bind'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* PRO Recent Trade History */}
           <div style={{ background: '#131b31', border: '1px solid #1e293b', borderRadius: 14, padding: 14, marginBottom: 14 }}>
             <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10 }}>{t.historyTitle}</div>
             {!entitlements.is_pro ? (

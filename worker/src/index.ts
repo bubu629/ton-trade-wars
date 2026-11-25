@@ -126,6 +126,58 @@ app.post('/api/checkin', async (c) => {
   return c.json({ ok: true, reward: 100, coins: newCoins, last_checkin_date: today });
 });
 
+// 付费会员（PRO/ELITE）绑定专属 Bot
+app.post('/api/bot/bind', async (c) => {
+  const body = await c.req.json<{ telegram_id: string; bot_token: string }>();
+  if (!body.telegram_id || !body.bot_token) {
+    return c.json({ ok: false, error: 'Missing telegram_id or bot_token' }, 400);
+  }
+
+  const tgId = String(body.telegram_id);
+  const token = String(body.bot_token).trim();
+  const now = Date.now();
+
+  const player = await c.env.DB.prepare('SELECT id FROM players WHERE telegram_id = ?')
+    .bind(tgId)
+    .first<any>();
+  if (!player) return c.json({ ok: false, error: 'Player not found' }, 404);
+
+  const sub = await c.env.DB.prepare(
+    `SELECT id FROM stars_purchases
+     WHERE player_id = ? AND item_id IN ('sub_pro', 'sub_elite')
+       AND (expires_at IS NULL OR expires_at > ?)
+     LIMIT 1`
+  ).bind(player.id, now).first<any>();
+
+  if (!sub) {
+    return c.json({ ok: false, error: 'PRO or ELITE membership required' }, 403);
+  }
+
+  const tgRes = await fetch(`https://api.telegram.org/bot${token}/getMe`).then((r) => r.json<any>()).catch(() => null);
+  if (!tgRes?.ok || !tgRes?.result?.username) {
+    return c.json({ ok: false, error: 'Invalid Bot Token (Telegram getMe failed)' }, 400);
+  }
+
+  const botUsername = tgRes.result.username;
+  await c.env.DB.prepare(
+    'UPDATE players SET custom_bot_token = ?, custom_bot_username = ?, updated_at = ? WHERE id = ?'
+  ).bind(token, botUsername, now, player.id).run();
+
+  return c.json({ ok: true, bot_username: botUsername });
+});
+
+// 解绑专属 Bot
+app.post('/api/bot/unbind', async (c) => {
+  const body = await c.req.json<{ telegram_id: string }>();
+  if (!body.telegram_id) return c.json({ ok: false, error: 'Missing telegram_id' }, 400);
+
+  await c.env.DB.prepare(
+    'UPDATE players SET custom_bot_token = NULL, custom_bot_username = NULL, updated_at = ? WHERE telegram_id = ?'
+  ).bind(Date.now(), String(body.telegram_id)).run();
+
+  return c.json({ ok: true });
+});
+
 app.post('/api/player', async (c) => {
   const body = await c.req.json<{
     telegram_id: string;
