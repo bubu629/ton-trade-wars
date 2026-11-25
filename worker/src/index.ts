@@ -513,7 +513,7 @@ app.post('/api/holdings/tpsl', async (c) => {
 async function runTpSlAndBotAlerts(db: D1Database) {
   const now = Date.now();
   const { results: rows } = await db.prepare(`
-    SELECT h.id, h.player_id, h.commodity_id, h.quantity, h.cost_basis, h.tp_price, h.sl_price, h.last_alert_at,
+    SELECT h.id, h.player_id, h.commodity_id, h.quantity, h.cost_basis, h.tp_price, h.sl_price, h.last_alert_at, h.leverage, h.margin_used, h.liq_price,
            c.symbol, c.price,
            p.telegram_id, p.custom_bot_token
     FROM holdings h
@@ -526,22 +526,25 @@ async function runTpSlAndBotAlerts(db: D1Database) {
     const price = Number(r.price);
     const qty = Number(r.quantity);
     const cost = Number(r.cost_basis || price);
+    const lev = Number(r.leverage || 1);
+    const marginUsed = Number(r.margin_used || 0);
+    const hitLiq = lev > 1 && r.liq_price && price <= Number(r.liq_price);
     const hitTp = r.tp_price && price >= Number(r.tp_price);
     const hitSl = r.sl_price && price <= Number(r.sl_price);
 
-    if (hitTp || hitSl) {
-      const proceeds = qty * price;
-      const pnl = proceeds - qty * cost;
-      const reason = hitTp ? 'Take Profit (TP)' : 'Stop Loss (SL)';
+    if (hitLiq || hitTp || hitSl) {
+      const pnl = hitLiq ? -marginUsed : (price - cost) * qty;
+      const proceeds = hitLiq ? 0 : (lev > 1 ? Math.max(0, marginUsed + pnl) : qty * price);
+      const reason = hitLiq ? `Liquidation (${lev}x)` : (hitTp ? 'Take Profit (TP)' : 'Stop Loss (SL)');
       const tradeId = `trd_${crypto.randomUUID().slice(0, 8)}`;
 
       await db.batch([
         db.prepare('UPDATE players SET coins = coins + ?, updated_at = ? WHERE id = ?').bind(proceeds, now, r.player_id),
         db.prepare('DELETE FROM holdings WHERE id = ?').bind(r.id),
         db.prepare(
-          `INSERT INTO trades (id, player_id, commodity_id, side, quantity, price, total, realized_pnl, created_at)
-           VALUES (?, ?, ?, 'SELL', ?, ?, ?, ?, ?)`
-        ).bind(tradeId, r.player_id, r.commodity_id, qty, price, proceeds, pnl, now),
+          `INSERT INTO trades (id, idempotency_key, player_id, commodity_id, side, quantity, unit_price, fee, total_coins, realized_pnl, created_at)
+           VALUES (?, ?, ?, ?, 'SELL', ?, ?, 0, ?, ?, ?)`
+        ).bind(tradeId, `auto_${tradeId}`, r.player_id, r.commodity_id, qty, price, proceeds, pnl, now),
       ]);
 
       if (r.custom_bot_token) {
@@ -579,6 +582,7 @@ app.post('/api/trade', async (c) => {
     commodity_id: string;
     side: 'BUY' | 'SELL';
     amount_usdt?: number;
+    leverage?: number;
     quantity?: number;
     sell_pct?: number;
     idempotency_key: string;
@@ -608,10 +612,23 @@ app.post('/api/trade', async (c) => {
   const FEE_RATE = 0.001;
 
   if (body.side === 'BUY') {
+    const lev = [1, 5, 10].includes(Number(body.leverage)) ? Number(body.leverage) : 1;
+    if (lev > 1) {
+      const sub = await c.env.DB.prepare(
+        `SELECT id FROM stars_purchases
+         WHERE player_id = ? AND item_id IN ('sub_pro', 'sub_elite')
+           AND (expires_at IS NULL OR expires_at > ?)
+         LIMIT 1`
+      ).bind(player.id, now).first<any>();
+      if (!sub) {
+        return c.json({ ok: false, error: 'PRO or ELITE membership required for 5x/10x leverage' }, 403);
+      }
+    }
+
     const unitPrice = item.price * (1 + halfSpread);
     let qty = Number(body.quantity || 0);
     if (body.amount_usdt && body.amount_usdt > 0) {
-      qty = body.amount_usdt / (unitPrice * (1 + FEE_RATE));
+      qty = (body.amount_usdt * lev) / (unitPrice * (1 + FEE_RATE));
     }
     if (!Number.isFinite(qty) || qty <= 0) {
       return c.json({ ok: false, error: 'Invalid buy amount' }, 400);
@@ -619,7 +636,9 @@ app.post('/api/trade', async (c) => {
 
     const subtotal = unitPrice * qty;
     const fee = Number((subtotal * FEE_RATE).toFixed(4));
-    const totalCost = Number((subtotal + fee).toFixed(2));
+    const margin = Number((subtotal / lev).toFixed(2));
+    const totalCost = Number((margin + fee).toFixed(2));
+    const liqPrice = lev > 1 ? Number((unitPrice * (1 - 0.9 / lev)).toFixed(6)) : null;
 
     if (totalCost < 1) return c.json({ ok: false, error: 'Min order is 1 USDT' }, 400);
     if (player.coins + 0.01 < totalCost) {
@@ -655,6 +674,12 @@ app.post('/api/trade', async (c) => {
     }
 
     await c.env.DB.batch(batch);
+    if (lev > 1) {
+      const newMargin = Number(((holding ? Number(holding.margin_used || 0) : 0) + margin).toFixed(2));
+      await c.env.DB.prepare(
+        'UPDATE holdings SET leverage = ?, margin_used = ?, liq_price = ? WHERE player_id = ? AND commodity_id = ?'
+      ).bind(lev, newMargin, liqPrice, player.id, item.id).run();
+    }
     return c.json({ ok: true, data: { side: 'BUY', qty, unitPrice, fee, totalCost, coins: newCoins } });
   }
 
@@ -682,15 +707,20 @@ app.post('/api/trade', async (c) => {
     const unitPrice = item.price * (1 - halfSpread);
     const subtotal = unitPrice * qty;
     const fee = Number((subtotal * FEE_RATE).toFixed(4));
-    const netProceeds = Number((subtotal - fee).toFixed(2));
+    const lev = Number(holding.leverage || 1);
+    const closeRatio = ownedQty > 0 ? qty / ownedQty : 1;
+    const releasedMargin = Number(holding.margin_used || 0) * closeRatio;
     const realizedPnl = Number(((unitPrice - Number(holding.cost_basis)) * qty - fee).toFixed(2));
+    const netProceeds = lev > 1
+      ? Math.max(0, Number((releasedMargin + realizedPnl).toFixed(2)))
+      : Number((subtotal - fee).toFixed(2));
 
     const newCoins = Number((player.coins + netProceeds).toFixed(2));
     const newQty = ownedQty - qty < 1e-8 ? 0 : ownedQty - qty;
 
     await c.env.DB.batch([
       c.env.DB.prepare('UPDATE players SET coins = ?, updated_at = ? WHERE id = ?').bind(newCoins, now, player.id),
-      c.env.DB.prepare('UPDATE holdings SET quantity = ?, updated_at = ? WHERE id = ?').bind(newQty, now, holding.id),
+      c.env.DB.prepare('UPDATE holdings SET quantity = ?, margin_used = ?, leverage = CASE WHEN ? = 0 THEN 1 ELSE leverage END, liq_price = CASE WHEN ? = 0 THEN NULL ELSE liq_price END, updated_at = ? WHERE id = ?').bind(newQty, Math.max(0, Number(holding.margin_used || 0) - releasedMargin), newQty, newQty, now, holding.id),
       c.env.DB.prepare(
         `INSERT INTO trades (id, idempotency_key, player_id, commodity_id, side, quantity, unit_price, fee, total_coins, realized_pnl, created_at)
          VALUES (?, ?, ?, ?, 'SELL', ?, ?, ?, ?, ?, ?)`

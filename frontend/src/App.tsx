@@ -362,6 +362,7 @@ export default function App() {
   const [selected, setSelected] = useState<Commodity | null>(null);
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
   const [buyUsd, setBuyUsd] = useState<number>(500);
+  const [leverage, setLeverage] = useState<number>(1);
   const [sellPct, setSellPct] = useState<number>(100);
   const [submitting, setSubmitting] = useState(false);
   const [buyingStarId, setBuyingStarId] = useState<string | null>(null);
@@ -636,7 +637,7 @@ export default function App() {
         side,
         idempotency_key: `${player.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       };
-      if (side === 'BUY') payload.amount_usdt = buyUsd;
+      if (side === 'BUY') { payload.amount_usdt = buyUsd; payload.leverage = leverage; }
       else payload.sell_pct = sellPct;
 
       const res = await fetch(`${API_BASE}/api/trade`, {
@@ -875,7 +876,12 @@ export default function App() {
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 800, fontSize: 15 }}>{h.symbol} <span style={{ color: '#38bdf8', fontSize: 12 }}>{fmtQty(h.quantity)}</span></div>
+                      <div style={{ fontWeight: 800, fontSize: 15 }}>{h.symbol} <span style={{ color: '#38bdf8', fontSize: 12 }}>{fmtQty(h.quantity)}</span>
+                          {Number((h as any).leverage || 1) > 1 && (
+                            <span style={{ marginLeft: 6, padding: '1px 5px', borderRadius: 5, background: '#422006', color: '#fbbf24', fontSize: 10, fontWeight: 800 }}>
+                              {(h as any).leverage}x · Liq ${fmtPrice((h as any).liq_price || 0)}
+                            </span>
+                          )}</div>
                       <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{t.avgCost}: ${fmtPrice(h.cost_basis)} · {t.now}: ${fmtPrice(h.price)}</div>
                         <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
                           {((h as any).tp_price || (h as any).sl_price) && (
@@ -1224,7 +1230,28 @@ export default function App() {
               <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>{t.buyAmount}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 6 }}>
-                  {[100, 500, 1000, 2500].map((amt) => (
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                  {[1, 5, 10].map((lv) => (
+                    <button
+                      key={lv}
+                      onClick={() => setLeverage(lv)}
+                      style={{
+                        flex: 1,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: leverage === lv ? '1px solid #fbbf24' : '1px solid #334155',
+                        background: leverage === lv ? '#422006' : '#0b1120',
+                        color: leverage === lv ? '#fbbf24' : '#94a3b8',
+                        fontSize: 11,
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {lv === 1 ? '1x Spot' : `${lv}x (PRO)`}
+                    </button>
+                  ))}
+                </div>
+                {[100, 500, 1000, 2500].map((amt) => (
                     <button key={amt} onClick={() => setBuyUsd(amt)} style={{
                       padding: '8px 0', borderRadius: 8, border: '1px solid #334155', cursor: 'pointer', fontWeight: 700, fontSize: 12,
                       background: buyUsd === amt ? '#38bdf8' : '#1e293b', color: buyUsd === amt ? '#0b1020' : '#f1f5f9'
