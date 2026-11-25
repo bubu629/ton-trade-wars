@@ -101,6 +101,31 @@ app.get('/api/market', async (c) => {
 });
 
 // 玩家登录 + 持仓 + 交易员档案 + 今日挑战 + Stars 权益
+// 每日签到领取 100 虚拟 USDT
+app.post('/api/checkin', async (c) => {
+  const body = await c.req.json<{ telegram_id: string }>();
+  if (!body.telegram_id) return c.json({ ok: false, error: 'Missing telegram_id' }, 400);
+
+  const tgId = String(body.telegram_id);
+  const today = getTodayStr();
+  const now = Date.now();
+  const player = await c.env.DB.prepare('SELECT * FROM players WHERE telegram_id = ?')
+    .bind(tgId)
+    .first<any>();
+  if (!player) return c.json({ ok: false, error: 'Player not found' }, 404);
+
+  if (player.last_checkin_date === today) {
+    return c.json({ ok: false, error: 'Already checked in today', last_checkin_date: today }, 409);
+  }
+
+  const newCoins = Number(player.coins || 0) + 100;
+  await c.env.DB.prepare(
+    'UPDATE players SET coins = ?, last_checkin_date = ?, updated_at = ? WHERE id = ?'
+  ).bind(newCoins, today, now, player.id).run();
+
+  return c.json({ ok: true, reward: 100, coins: newCoins, last_checkin_date: today });
+});
+
 app.post('/api/player', async (c) => {
   const body = await c.req.json<{
     telegram_id: string;

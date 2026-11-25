@@ -490,6 +490,29 @@ export default function App() {
     }
   };
 
+  const doCheckin = async () => {
+    if (!player || submitting) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/checkin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegram_id: player.telegram_id }),
+      }).then((r) => r.json());
+      const isZh = t.btnUp.includes('看涨');
+      if (res.ok) {
+        showToast('ok', isZh ? '✅ 签到成功！获得 +100 虚拟 USDT' : '✅ Checked in! +100 vUSDT');
+        await loadAll();
+      } else {
+        showToast('err', res.error || (isZh ? '今日已签到' : 'Already checked in'));
+      }
+    } catch (e: any) {
+      showToast('err', e.message || 'Error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const submitChallenge = async (direction: 'UP' | 'DOWN') => {
     if (!player || submitting) return;
     setSubmitting(true);
@@ -636,6 +659,40 @@ export default function App() {
       {/* Tab: Market */}
       {tab === 'market' && (
         <div>
+            {(() => {
+              const isZh = t.btnUp.includes('看涨');
+              const todayStr = new Date().toISOString().slice(0, 10);
+              const done = (player as any)?.last_checkin_date === todayStr;
+              return (
+                <div style={{ background: '#131b31', border: '1px solid #1e3a5f', borderRadius: 12, padding: 12, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: '#fbbf24' }}>
+                      {isZh ? '🎁 每日签到领虚拟金' : '🎁 Daily Check-in Bonus'}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                      {isZh ? '每天签到免费赠送 +100 虚拟 USDT' : 'Claim +100 vUSDT free every day'}
+                    </div>
+                  </div>
+                  <button
+                    disabled={submitting || done}
+                    onClick={doCheckin}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 9,
+                      border: 'none',
+                      background: done ? '#334155' : '#2563eb',
+                      color: done ? '#94a3b8' : '#fff',
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: done ? 'default' : 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {done ? (isZh ? '✅ 今日已签' : '✅ Claimed') : (isZh ? '签到 +100' : 'Claim +100')}
+                  </button>
+                </div>
+              );
+            })()}
           <div style={{ background: '#131b31', border: '1px solid #1e3a5f', borderRadius: 12, padding: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8', marginBottom: 4 }}>{t.challengeTitle}</div>
             {!todayChallenge ? (
