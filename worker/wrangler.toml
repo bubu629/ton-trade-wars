@@ -8,7 +8,7 @@ TREASURY_WALLET = "UQAi7GWc5DAPgpJxX7eOA_NijNeUHxpiirzAFi1OerKDRt85"
 [[d1_databases]]
 binding = "DB"
 database_name = "ton-trade-wars-db"
-database_id = "9960c2ae-2bac-4599-b90c-53bcea456dca"
+database_id = "572c78e1-1bc8-4e4c-b1db-61130e5b37ab"
 
 [triggers]
 crons = ["* * * * *"]
