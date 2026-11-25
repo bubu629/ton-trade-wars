@@ -483,6 +483,96 @@ app.post('/api/challenge', async (c) => {
   });
 });
 
+// 设置/清除持仓止盈止损 (TP/SL)
+app.post('/api/holdings/tpsl', async (c) => {
+  const body = await c.req.json<{
+    telegram_id: string;
+    commodity_id: string;
+    tp_price?: number | null;
+    sl_price?: number | null;
+  }>();
+  if (!body.telegram_id || !body.commodity_id) {
+    return c.json({ ok: false, error: 'Missing parameters' }, 400);
+  }
+
+  const player = await c.env.DB.prepare('SELECT id FROM players WHERE telegram_id = ?')
+    .bind(String(body.telegram_id))
+    .first<any>();
+  if (!player) return c.json({ ok: false, error: 'Player not found' }, 404);
+
+  const tp = body.tp_price && Number(body.tp_price) > 0 ? Number(body.tp_price) : null;
+  const sl = body.sl_price && Number(body.sl_price) > 0 ? Number(body.sl_price) : null;
+
+  await c.env.DB.prepare(
+    'UPDATE holdings SET tp_price = ?, sl_price = ?, updated_at = ? WHERE player_id = ? AND commodity_id = ?'
+  ).bind(tp, sl, Date.now(), player.id, body.commodity_id).run();
+
+  return c.json({ ok: true, tp_price: tp, sl_price: sl });
+});
+
+async function runTpSlAndBotAlerts(db: D1Database) {
+  const now = Date.now();
+  const { results: rows } = await db.prepare(`
+    SELECT h.id, h.player_id, h.commodity_id, h.quantity, h.cost_basis, h.tp_price, h.sl_price, h.last_alert_at,
+           c.symbol, c.price,
+           p.telegram_id, p.custom_bot_token
+    FROM holdings h
+    JOIN commodities c ON h.commodity_id = c.id
+    JOIN players p ON h.player_id = p.id
+    WHERE h.quantity > 0.00000001
+  `).all<any>();
+
+  for (const r of rows) {
+    const price = Number(r.price);
+    const qty = Number(r.quantity);
+    const cost = Number(r.cost_basis || price);
+    const hitTp = r.tp_price && price >= Number(r.tp_price);
+    const hitSl = r.sl_price && price <= Number(r.sl_price);
+
+    if (hitTp || hitSl) {
+      const proceeds = qty * price;
+      const pnl = proceeds - qty * cost;
+      const reason = hitTp ? 'Take Profit (TP)' : 'Stop Loss (SL)';
+      const tradeId = `trd_${crypto.randomUUID().slice(0, 8)}`;
+
+      await db.batch([
+        db.prepare('UPDATE players SET coins = coins + ?, updated_at = ? WHERE id = ?').bind(proceeds, now, r.player_id),
+        db.prepare('DELETE FROM holdings WHERE id = ?').bind(r.id),
+        db.prepare(
+          `INSERT INTO trades (id, player_id, commodity_id, side, quantity, price, total, realized_pnl, created_at)
+           VALUES (?, ?, ?, 'SELL', ?, ?, ?, ?, ?)`
+        ).bind(tradeId, r.player_id, r.commodity_id, qty, price, proceeds, pnl, now),
+      ]);
+
+      if (r.custom_bot_token) {
+        const sign = pnl >= 0 ? '+' : '';
+        const text = `🎯 ${reason} Triggered!\n${r.symbol} auto-closed @ $${price}\nPnL: ${sign}$${pnl.toFixed(2)} vUSDT`;
+        await fetch(`https://api.telegram.org/bot${r.custom_bot_token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: r.telegram_id, text }),
+        }).catch(() => {});
+      }
+      continue;
+    }
+
+    if (r.custom_bot_token && cost > 0 && now - Number(r.last_alert_at || 0) > 3600000) {
+      const pct = ((price - cost) / cost) * 100;
+      if (Math.abs(pct) >= 5) {
+        const icon = pct > 0 ? '🚀' : '⚠️';
+        const sign = pct > 0 ? '+' : '';
+        const text = `${icon} Price Alert: ${r.symbol} ${sign}${pct.toFixed(2)}%\nEntry: $${cost} → Now: $${price}`;
+        await fetch(`https://api.telegram.org/bot${r.custom_bot_token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: r.telegram_id, text }),
+        }).catch(() => {});
+        await db.prepare('UPDATE holdings SET last_alert_at = ? WHERE id = ?').bind(now, r.id).run();
+      }
+    }
+  }
+}
+
 app.post('/api/trade', async (c) => {
   const body = await c.req.json<{
     telegram_id: string;
@@ -769,6 +859,6 @@ async function runMarketTick(db: D1Database): Promise<number> {
 export default {
   fetch: app.fetch,
   async scheduled(_event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
-    ctx.waitUntil(runMarketTick(env.DB));
+    ctx.waitUntil((async () => { await runMarketTick(env.DB); await runTpSlAndBotAlerts(env.DB); })());
   },
 };

@@ -490,6 +490,37 @@ export default function App() {
     }
   };
 
+  const [tpslEdit, setTpslEdit] = useState<{ id: string; tp: string; sl: string } | null>(null);
+
+  const saveTpSl = async (commodityId: string, tpStr: string, slStr: string) => {
+    if (!player || submitting) return;
+    const isZh = t.btnUp.includes('看涨');
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/holdings/tpsl`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telegram_id: player.telegram_id,
+          commodity_id: commodityId,
+          tp_price: tpStr.trim() ? Number(tpStr) : null,
+          sl_price: slStr.trim() ? Number(slStr) : null,
+        }),
+      }).then((r) => r.json());
+      if (res.ok) {
+        showToast('ok', isZh ? '✅ 止盈止损已更新' : '✅ TP/SL updated');
+        setTpslEdit(null);
+        await loadAll();
+      } else {
+        showToast('err', res.error || 'Failed');
+      }
+    } catch (e: any) {
+      showToast('err', e.message || 'Error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const [botTokenInput, setBotTokenInput] = useState('');
 
   const bindBot = async () => {
@@ -846,6 +877,57 @@ export default function App() {
                     <div>
                       <div style={{ fontWeight: 800, fontSize: 15 }}>{h.symbol} <span style={{ color: '#38bdf8', fontSize: 12 }}>{fmtQty(h.quantity)}</span></div>
                       <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{t.avgCost}: ${fmtPrice(h.cost_basis)} · {t.now}: ${fmtPrice(h.price)}</div>
+                        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
+                          {((h as any).tp_price || (h as any).sl_price) && (
+                            <span style={{ fontSize: 10, color: '#fbbf24' }}>
+                              {(h as any).tp_price ? `TP:$${(h as any).tp_price} ` : ''}
+                              {(h as any).sl_price ? `SL:$${(h as any).sl_price}` : ''}
+                            </span>
+                          )}
+                          <button
+                            onClick={() =>
+                              setTpslEdit(
+                                tpslEdit?.id === h.commodity_id
+                                  ? null
+                                  : {
+                                      id: h.commodity_id,
+                                      tp: (h as any).tp_price ? String((h as any).tp_price) : '',
+                                      sl: (h as any).sl_price ? String((h as any).sl_price) : '',
+                                    }
+                              )
+                            }
+                            style={{ padding: '2px 7px', borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#38bdf8', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}
+                          >
+                            TP/SL
+                          </button>
+                          {tpslEdit?.id === h.commodity_id && (
+                            <div style={{ display: 'flex', gap: 4, marginTop: 4, width: '100%' }}>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder="TP $"
+                                value={tpslEdit.tp}
+                                onChange={(e) => setTpslEdit({ ...tpslEdit, tp: e.target.value })}
+                                style={{ width: 70, padding: '3px 6px', borderRadius: 6, border: '1px solid #334155', background: '#0b1120', color: '#fff', fontSize: 11 }}
+                              />
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder="SL $"
+                                value={tpslEdit.sl}
+                                onChange={(e) => setTpslEdit({ ...tpslEdit, sl: e.target.value })}
+                                style={{ width: 70, padding: '3px 6px', borderRadius: 6, border: '1px solid #334155', background: '#0b1120', color: '#fff', fontSize: 11 }}
+                              />
+                              <button
+                                disabled={submitting}
+                                onClick={() => saveTpSl(h.commodity_id, tpslEdit.tp, tpslEdit.sl)}
+                                style={{ padding: '3px 8px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                              >
+                                OK
+                              </button>
+                            </div>
+                          )}
+                        </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 700, fontSize: 14 }}>${(h.quantity * h.price).toFixed(2)}</div>
