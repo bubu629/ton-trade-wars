@@ -554,7 +554,7 @@ export default function App() {
       }).then((r) => r.json());
       const isZh = t.btnUp.includes('看涨');
       if (res.ok) {
-        showToast('ok', isZh ? '✅ 签到成功！获得 +100 虚拟 USDT' : '✅ Checked in! +100 vUSDT');
+        showToast('ok', isZh ? `✅ 连续签到第 ${res.streak || 1} 天！获得 +${res.reward || 100} 虚拟 USDT` : `✅ Day ${res.streak || 1} Streak! +${res.reward || 100} vUSDT`);
         await loadAll();
       } else {
         showToast('err', res.error || (isZh ? '今日已签到' : 'Already checked in'));
@@ -723,7 +723,7 @@ export default function App() {
                       {isZh ? '🎁 每日签到领虚拟金' : '🎁 Daily Check-in Bonus'}
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
-                      {isZh ? '每天签到免费赠送 +100 虚拟 USDT' : 'Claim +100 vUSDT free every day'}
+                      {isZh ? `连签递增奖励 (+100~+500) · 当前连签 ${(player as any)?.checkin_streak || 0} 天` : `Streak bonus (+100~+500) · Current: ${(player as any)?.checkin_streak || 0}d`}
                     </div>
                   </div>
                   <button
@@ -741,7 +741,7 @@ export default function App() {
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {done ? (isZh ? '✅ 今日已签' : '✅ Claimed') : (isZh ? '签到 +100' : 'Claim +100')}
+                    {done ? (isZh ? '✅ 今日已签' : '✅ Claimed') : (isZh ? '立即签到' : 'Check In')}
                   </button>
                 </div>
               );

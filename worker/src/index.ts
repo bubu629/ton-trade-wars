@@ -36,6 +36,13 @@ const STARS_ITEMS = [
     stars: 99,
     duration_days: null,
   },
+  {
+    id: 'reset_account',
+    title: 'Account Reset Card',
+    desc: 'Reset equity to $10,000 vUSDT & clear all losses/positions',
+    stars: 49,
+    duration_days: 0,
+  },
 ];
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -101,14 +108,16 @@ app.get('/api/market', async (c) => {
 });
 
 // 玩家登录 + 持仓 + 交易员档案 + 今日挑战 + Stars 权益
-// 每日签到领取 100 虚拟 USDT
+// 每日连续签到阶梯奖励（100 -> 500 虚拟 USDT）
 app.post('/api/checkin', async (c) => {
   const body = await c.req.json<{ telegram_id: string }>();
   if (!body.telegram_id) return c.json({ ok: false, error: 'Missing telegram_id' }, 400);
 
   const tgId = String(body.telegram_id);
-  const today = getTodayStr();
   const now = Date.now();
+  const today = getTodayStr();
+  const yesterday = new Date(now - 86400000).toISOString().slice(0, 10);
+
   const player = await c.env.DB.prepare('SELECT * FROM players WHERE telegram_id = ?')
     .bind(tgId)
     .first<any>();
@@ -118,12 +127,16 @@ app.post('/api/checkin', async (c) => {
     return c.json({ ok: false, error: 'Already checked in today', last_checkin_date: today }, 409);
   }
 
-  const newCoins = Number(player.coins || 0) + 100;
-  await c.env.DB.prepare(
-    'UPDATE players SET coins = ?, last_checkin_date = ?, updated_at = ? WHERE id = ?'
-  ).bind(newCoins, today, now, player.id).run();
+  const streak = player.last_checkin_date === yesterday ? Number(player.checkin_streak || 0) + 1 : 1;
+  const rewards = [100, 150, 200, 250, 300, 400, 500];
+  const reward = rewards[Math.min(streak - 1, rewards.length - 1)];
+  const newCoins = Number(player.coins || 0) + reward;
 
-  return c.json({ ok: true, reward: 100, coins: newCoins, last_checkin_date: today });
+  await c.env.DB.prepare(
+    'UPDATE players SET coins = ?, last_checkin_date = ?, checkin_streak = ?, updated_at = ? WHERE id = ?'
+  ).bind(newCoins, today, streak, now, player.id).run();
+
+  return c.json({ ok: true, reward, streak, coins: newCoins, last_checkin_date: today });
 });
 
 // 付费会员（PRO/ELITE）绑定专属 Bot
@@ -205,7 +218,7 @@ app.post('/api/player', async (c) => {
     }
     await c.env.DB.prepare(
       `INSERT INTO players (id, telegram_id, username, first_name, coins, wallet_address, referred_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 10000, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ${validReferrer ? 10500 : 10000}, ?, ?, ?, ?)`
     )
       .bind(
         id,
@@ -218,6 +231,10 @@ app.post('/api/player', async (c) => {
         now
       )
       .run();
+    if (validReferrer) {
+      await c.env.DB.prepare('UPDATE players SET coins = coins + 500, updated_at = ? WHERE id = ?')
+        .bind(now, validReferrer.id).run();
+    }
     player = await c.env.DB.prepare('SELECT * FROM players WHERE id = ?').bind(id).first<any>();
   } else if (body.wallet_address && body.wallet_address !== player.wallet_address) {
     await c.env.DB.prepare('UPDATE players SET wallet_address = ?, updated_at = ? WHERE id = ?')
@@ -397,6 +414,13 @@ app.post('/api/telegram/webhook', async (c) => {
         const now = Date.now();
         const expiresAt = item.duration_days ? now + item.duration_days * 86400000 : null;
         const chargeId = payment.telegram_payment_charge_id || `chg_${now}`;
+        if (item.id === 'reset_account') {
+          await c.env.DB.batch([
+            c.env.DB.prepare('UPDATE players SET coins = 10000, updated_at = ? WHERE id = ?').bind(now, meta.player_id),
+            c.env.DB.prepare('DELETE FROM holdings WHERE player_id = ?').bind(meta.player_id),
+            c.env.DB.prepare('DELETE FROM trades WHERE player_id = ?').bind(meta.player_id),
+          ]);
+        }
         await c.env.DB.prepare(
           `INSERT OR IGNORE INTO stars_purchases (id, player_id, item_id, stars_amount, charge_id, expires_at, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
